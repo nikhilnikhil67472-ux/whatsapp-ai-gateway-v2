@@ -7,11 +7,11 @@ WORKDIR /app
 RUN apk add --no-cache python3 make g++ gcc
 
 COPY package*.json tsconfig.json ./
+COPY scripts ./scripts
 RUN npm ci
 
 # Compile TypeScript
 COPY src ./src
-COPY scripts ./scripts
 RUN npm run build
 
 # Prune devDependencies to keep image lean
@@ -42,6 +42,7 @@ COPY --chown=node:node package*.json ./
 COPY --chown=node:node --from=builder /app/node_modules ./node_modules
 COPY --chown=node:node --from=builder /app/dist ./dist
 COPY --chown=node:node templates ./templates
+COPY --chown=node:node scripts ./scripts
 
 USER node
 

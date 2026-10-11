@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { config } from '../config/index.js';
+import { db } from '../db/database.js';
 
 export interface TranscriptionResult {
   text: string;
@@ -19,8 +20,16 @@ export async function transcribeAudioFile(
     return null;
   }
 
-  const groqKey = customApiKey || config.groqApiKey || process.env.GROQ_API_KEY;
-  const openaiKey = config.openaiApiKey || process.env.OPENAI_API_KEY;
+  const groqKey =
+    customApiKey ||
+    db.getSystemSetting('groq_api_key') ||
+    config.groqApiKey ||
+    process.env.GROQ_API_KEY;
+
+  const openaiKey =
+    db.getSystemSetting('openai_api_key') ||
+    config.openaiApiKey ||
+    process.env.OPENAI_API_KEY;
 
   if (!groqKey && !openaiKey) {
     return null;

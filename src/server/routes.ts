@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { db } from '../db/database.js';
 import { WhatsAppEngineManager } from '../whatsapp/manager.js';
-import { generateApiKey, hashApiKey } from '../security/crypto.js';
+import { generateApiKey, hashApiKey, encrypt, decrypt } from '../security/crypto.js';
 import {
   createJwtToken,
   verifyJwtToken,
@@ -54,6 +54,153 @@ apiRouter.get('/health', (req: Request, res: Response) => {
 
 apiRouter.get('/ping', (req: Request, res: Response) => {
   res.type('text/plain').send('pong');
+});
+
+// --- Global System AI & Media Keys Manager ---
+
+apiRouter.get('/system/ai-keys', (req: Request, res: Response) => {
+  const settings = db.listSystemSettings();
+  const groqKey = db.getSystemSetting('groq_api_key') || config.groqApiKey || process.env.GROQ_API_KEY || '';
+  const openaiKey = db.getSystemSetting('openai_api_key') || config.openaiApiKey || process.env.OPENAI_API_KEY || '';
+  const anthropicKey = db.getSystemSetting('anthropic_api_key') || config.anthropicApiKey || process.env.ANTHROPIC_API_KEY || '';
+
+  const mask = (key: string) => {
+    if (!key) return '';
+    if (key.length <= 8) return '••••••••';
+    return `${key.slice(0, 4)}...${key.slice(-4)}`;
+  };
+
+  res.json({
+    groq: {
+      configured: Boolean(groqKey),
+      source: db.getSystemSetting('groq_api_key') ? 'database' : (groqKey ? 'env' : 'none'),
+      masked: mask(groqKey),
+      updated_at: settings['groq_api_key']?.updated_at || null,
+    },
+    openai: {
+      configured: Boolean(openaiKey),
+      source: db.getSystemSetting('openai_api_key') ? 'database' : (openaiKey ? 'env' : 'none'),
+      masked: mask(openaiKey),
+      updated_at: settings['openai_api_key']?.updated_at || null,
+    },
+    anthropic: {
+      configured: Boolean(anthropicKey),
+      source: db.getSystemSetting('anthropic_api_key') ? 'database' : (anthropicKey ? 'env' : 'none'),
+      masked: mask(anthropicKey),
+      updated_at: settings['anthropic_api_key']?.updated_at || null,
+    },
+  });
+});
+
+apiRouter.post('/system/ai-keys', (req: Request, res: Response) => {
+  try {
+    const { groq_api_key, openai_api_key, anthropic_api_key } = req.body;
+    let savedCount = 0;
+
+    if (typeof groq_api_key === 'string') {
+      const trimmed = groq_api_key.trim();
+      if (trimmed) {
+        db.setSystemSetting('groq_api_key', trimmed);
+        savedCount++;
+      } else {
+        db.deleteSystemSetting('groq_api_key');
+      }
+    }
+
+    if (typeof openai_api_key === 'string') {
+      const trimmed = openai_api_key.trim();
+      if (trimmed) {
+        db.setSystemSetting('openai_api_key', trimmed);
+        savedCount++;
+      } else {
+        db.deleteSystemSetting('openai_api_key');
+      }
+    }
+
+    if (typeof anthropic_api_key === 'string') {
+      const trimmed = anthropic_api_key.trim();
+      if (trimmed) {
+        db.setSystemSetting('anthropic_api_key', trimmed);
+        savedCount++;
+      } else {
+        db.deleteSystemSetting('anthropic_api_key');
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'AI API keys saved and connected successfully',
+      saved_count: savedCount,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to save AI keys' });
+  }
+});
+
+apiRouter.post('/system/test-ai-key', async (req: Request, res: Response) => {
+  try {
+    const { provider, api_key } = req.body;
+    if (!provider || !['groq', 'openai', 'anthropic'].includes(provider)) {
+      return res.status(400).json({ error: 'Valid provider (groq, openai, anthropic) required' });
+    }
+
+    const keyToTest = (typeof api_key === 'string' && api_key.trim())
+      ? api_key.trim()
+      : db.getSystemSetting(`${provider}_api_key`) || (
+          provider === 'groq' ? (config.groqApiKey || process.env.GROQ_API_KEY) :
+          provider === 'openai' ? (config.openaiApiKey || process.env.OPENAI_API_KEY) :
+          (config.anthropicApiKey || process.env.ANTHROPIC_API_KEY)
+        );
+
+    if (!keyToTest) {
+      return res.status(400).json({ error: `No API key provided or configured for ${provider}` });
+    }
+
+    const start = Date.now();
+
+    if (provider === 'groq') {
+      const response = await fetch('https://api.groq.com/openai/v1/models', {
+        headers: { Authorization: `Bearer ${keyToTest}` },
+      });
+      const latencyMs = Date.now() - start;
+      if (!response.ok) {
+        const errorData = await response.text();
+        return res.status(400).json({ success: false, provider: 'groq', latency_ms: latencyMs, error: `Groq error (${response.status}): ${errorData}` });
+      }
+      return res.json({ success: true, provider: 'groq', latency_ms: latencyMs, message: `Groq Cloud Whisper API verified in ${latencyMs}ms!` });
+    } else if (provider === 'openai') {
+      const response = await fetch('https://api.openai.com/v1/models', {
+        headers: { Authorization: `Bearer ${keyToTest}` },
+      });
+      const latencyMs = Date.now() - start;
+      if (!response.ok) {
+        const errorData = await response.text();
+        return res.status(400).json({ success: false, provider: 'openai', latency_ms: latencyMs, error: `OpenAI error (${response.status}): ${errorData}` });
+      }
+      return res.json({ success: true, provider: 'openai', latency_ms: latencyMs, message: `OpenAI API verified in ${latencyMs}ms!` });
+    } else if (provider === 'anthropic') {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': keyToTest,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'claude-3-haiku-20240307',
+          max_tokens: 1,
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+      });
+      const latencyMs = Date.now() - start;
+      if (!response.ok && response.status === 401) {
+        return res.status(400).json({ success: false, provider: 'anthropic', latency_ms: latencyMs, error: 'Invalid Anthropic API Key (401 Unauthorized)' });
+      }
+      return res.json({ success: true, provider: 'anthropic', latency_ms: latencyMs, message: `Anthropic Claude API verified in ${latencyMs}ms!` });
+    }
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'Connection test failed' });
+  }
 });
 
 export function normalizeWebhookUrl(raw: unknown): string | null {
@@ -125,6 +272,7 @@ const updateInstanceSchema = z.object({
   ai_provider: z.enum(['openai', 'anthropic', 'n8n', 'webhook']).optional(),
   ai_model: z.string().optional().nullable(),
   ai_system_prompt: z.string().optional().nullable(),
+  ai_api_key: z.string().optional().nullable(),
   webhook_url: webhookUrlSchema,
   webhook_secret: z.string().optional().nullable(),
   n8n_webhook_url: webhookUrlSchema,
@@ -378,7 +526,11 @@ apiRouter.patch('/instances/:id', (req: Request, res: Response) => {
     const instance = db.getInstanceByIdentifier(req.params.id, req.user?.org_id);
     if (!instance) return res.status(404).json({ error: 'Instance not found' });
 
-    const updates = updateInstanceSchema.parse(req.body);
+    const updates: any = updateInstanceSchema.parse(req.body);
+    if (updates.ai_api_key !== undefined) {
+      updates.ai_api_key_encrypted = updates.ai_api_key ? encrypt(updates.ai_api_key.trim()) : null;
+      delete updates.ai_api_key;
+    }
     db.updateInstance(instance.id, updates);
     res.json(db.getInstance(instance.id));
   } catch (err: any) {

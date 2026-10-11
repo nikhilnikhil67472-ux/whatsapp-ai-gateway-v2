@@ -1,4 +1,5 @@
 import { config } from '../config/index.js';
+import { db } from '../db/database.js';
 import { AiResponse } from './openai.js';
 
 export function formatAnthropicMessages(
@@ -33,9 +34,9 @@ export async function callAnthropic(params: {
   systemPrompt: string;
   messages: Array<{ role: 'user' | 'assistant'; content: string }>;
 }): Promise<AiResponse> {
-  const key = params.apiKey || config.anthropicApiKey;
+  const key = params.apiKey || db.getSystemSetting('anthropic_api_key') || config.anthropicApiKey || process.env.ANTHROPIC_API_KEY;
   if (!key) {
-    throw new Error('Anthropic API key is not configured');
+    throw new Error('Anthropic API key is not configured. Add it in Dashboard settings or .env');
   }
 
   const model = params.model || config.anthropicModel;

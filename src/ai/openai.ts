@@ -1,4 +1,5 @@
 import { config } from '../config/index.js';
+import { db } from '../db/database.js';
 
 export interface AiChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -18,9 +19,9 @@ export async function callOpenAi(params: {
   systemPrompt: string;
   messages: Array<{ role: 'user' | 'assistant'; content: string }>;
 }): Promise<AiResponse> {
-  const key = params.apiKey || config.openaiApiKey;
+  const key = params.apiKey || db.getSystemSetting('openai_api_key') || config.openaiApiKey || process.env.OPENAI_API_KEY;
   if (!key) {
-    throw new Error('OpenAI API key is not configured');
+    throw new Error('OpenAI API key is not configured. Add it in Dashboard settings or .env');
   }
 
   const model = params.model || config.openaiModel;

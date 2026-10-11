@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import { config } from '../config/index.js';
 import { SQL_INIT_TABLES } from './schema.js';
 import { hashPassword } from '../security/auth.js';
+import { encrypt, decrypt } from '../security/crypto.js';
 
 export interface Organization {
   id: string;
@@ -1462,6 +1463,55 @@ export class GatewayDatabase {
   public deleteApiKey(id: string): boolean {
     const res = this.db.prepare('DELETE FROM api_keys WHERE id = ?').run(id);
     return res.changes > 0;
+  }
+
+  // --- Global System Settings (AI API Keys & Integrations) ---
+
+  public setSystemSetting(key: string, value: string): void {
+    const encrypted = encrypt(value);
+    const now = this.now();
+    this.db.prepare(`
+      INSERT INTO system_settings (key, value_encrypted, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value_encrypted = excluded.value_encrypted, updated_at = excluded.updated_at
+    `).run(key, encrypted, now);
+  }
+
+  public getSystemSetting(key: string): string | null {
+    const row = this.db.prepare('SELECT value_encrypted FROM system_settings WHERE key = ?').get(key) as any;
+    if (!row?.value_encrypted) return null;
+    try {
+      return decrypt(row.value_encrypted);
+    } catch {
+      return null;
+    }
+  }
+
+  public deleteSystemSetting(key: string): boolean {
+    const res = this.db.prepare('DELETE FROM system_settings WHERE key = ?').run(key);
+    return res.changes > 0;
+  }
+
+  public listSystemSettings(): Record<string, { configured: boolean; masked: string; updated_at: string }> {
+    const rows = this.db.prepare('SELECT key, value_encrypted, updated_at FROM system_settings').all() as any[];
+    const result: Record<string, { configured: boolean; masked: string; updated_at: string }> = {};
+    for (const row of rows) {
+      let masked = '';
+      try {
+        const val = decrypt(row.value_encrypted);
+        if (val) {
+          masked = val.length > 8 ? `${val.slice(0, 4)}...${val.slice(-4)}` : '••••••••';
+        }
+      } catch {
+        masked = '••••••••';
+      }
+      result[row.key] = {
+        configured: Boolean(row.value_encrypted),
+        masked,
+        updated_at: row.updated_at,
+      };
+    }
+    return result;
   }
 }
 

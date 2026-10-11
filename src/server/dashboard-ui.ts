@@ -497,27 +497,98 @@ export function renderDashboardHtml(): string {
               </span>
             </div>
 
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-              <div class="p-4 rounded-xl bg-gray-900/70 border border-gray-800 space-y-2">
-                <div class="flex items-center justify-between">
-                  <span class="font-bold text-white flex items-center gap-1.5">
-                    <i class="fa-solid fa-gauge-high text-teal-400"></i> Groq Whisper Turbo
-                  </span>
-                  <span class="text-[10px] px-2 py-0.5 rounded bg-teal-500/20 text-teal-300 font-bold uppercase">Primary (~250ms)</span>
+            <!-- Interactive AI & Media API Key Manager (Zero .env Required) -->
+            <div class="space-y-4">
+              <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h5 class="text-xs font-bold text-white flex items-center gap-1.5">
+                    <i class="fa-solid fa-key text-amber-400"></i> AI & Voice Extraction API Keys (Zero .env Required)
+                  </h5>
+                  <p class="text-[11px] text-gray-400 mt-0.5">Enter your API keys below to enable instant voice notes transcription & AI replies without touching .env or restarting the server.</p>
                 </div>
-                <p class="text-gray-400 text-[11px]">Hardware-accelerated Whisper-large-v3-turbo engine. Ideal for live conversational WhatsApp chatbots where latency matters.</p>
-                <div class="text-[10px] text-gray-500 font-mono">Config: Set GROQ_API_KEY in .env</div>
+                <button type="button" onclick="loadSystemAiKeys()" class="text-xs px-2.5 py-1 rounded-lg bg-gray-900 hover:bg-gray-800 text-gray-300 border border-gray-800 transition self-start sm:self-auto">
+                  <i class="fa-solid fa-rotate-right mr-1"></i> Refresh Status
+                </button>
               </div>
 
-              <div class="p-4 rounded-xl bg-gray-900/70 border border-gray-800 space-y-2">
-                <div class="flex items-center justify-between">
-                  <span class="font-bold text-white flex items-center gap-1.5">
-                    <i class="fa-solid fa-brain text-purple-400"></i> OpenAI Whisper
-                  </span>
-                  <span class="text-[10px] px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 font-bold uppercase">Fallback (~1200ms)</span>
+              <!-- Live Feedback Alert Bar -->
+              <div id="aiKeyFeedbackBar" class="hidden p-3 rounded-xl border text-xs font-medium flex items-center justify-between">
+                <div id="aiKeyFeedbackMessage" class="flex items-center gap-2"></div>
+                <button type="button" onclick="document.getElementById('aiKeyFeedbackBar').classList.add('hidden')" class="text-gray-400 hover:text-white text-xs">
+                  <i class="fa-solid fa-xmark"></i>
+                </button>
+              </div>
+
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                <!-- Groq Whisper Turbo Card -->
+                <div class="p-4 rounded-xl bg-gray-900/80 border border-teal-500/30 space-y-3">
+                  <div class="flex items-center justify-between">
+                    <span class="font-bold text-white flex items-center gap-1.5">
+                      <i class="fa-solid fa-gauge-high text-teal-400"></i> Groq Whisper Turbo
+                    </span>
+                    <span id="badgeGroqStatus" class="text-[10px] px-2 py-0.5 rounded bg-gray-800 text-gray-400 font-bold uppercase">Checking...</span>
+                  </div>
+                  <p class="text-gray-400 text-[11px]">Hardware-accelerated Whisper-large-v3-turbo (~250ms). Free forever on Groq Cloud.</p>
+                  
+                  <div class="space-y-1">
+                    <label class="block text-gray-400 text-[11px] font-medium">Groq API Key</label>
+                    <div class="relative">
+                      <input id="inputGroqApiKey" type="password" placeholder="gsk_..." class="w-full px-3 py-2 pr-10 rounded-lg bg-gray-950 border border-gray-800 text-white font-mono text-xs focus:outline-none focus:border-teal-500" />
+                      <button type="button" onclick="togglePasswordVisibility('inputGroqApiKey', this)" class="absolute right-3 top-2.5 text-gray-500 hover:text-gray-300">
+                        <i class="fa-solid fa-eye"></i>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="flex items-center justify-between pt-1">
+                    <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer" class="text-[11px] text-teal-400 hover:text-teal-300 underline flex items-center gap-1">
+                      Get free Groq key <i class="fa-solid fa-arrow-up-right-from-square text-[9px]"></i>
+                    </a>
+                    <div class="flex gap-2">
+                      <button type="button" onclick="testAiKeyConnection('groq')" class="px-2.5 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-200 font-semibold border border-gray-700 text-[11px] transition">
+                        <i class="fa-solid fa-vial mr-1"></i> Test
+                      </button>
+                      <button type="button" onclick="saveSingleAiKey('groq')" class="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-bold text-[11px] transition shadow-lg shadow-teal-900/30">
+                        <i class="fa-solid fa-check mr-1"></i> Connect
+                      </button>
+                    </div>
+                  </div>
                 </div>
-                <p class="text-gray-400 text-[11px]">Official OpenAI Whisper-1 audio API. Automatically used as a resilient fallback if Groq is unavailable.</p>
-                <div class="text-[10px] text-gray-500 font-mono">Config: Set OPENAI_API_KEY in .env</div>
+
+                <!-- OpenAI Whisper & GPT Card -->
+                <div class="p-4 rounded-xl bg-gray-900/80 border border-purple-500/30 space-y-3">
+                  <div class="flex items-center justify-between">
+                    <span class="font-bold text-white flex items-center gap-1.5">
+                      <i class="fa-solid fa-brain text-purple-400"></i> OpenAI (Whisper & GPT-4o)
+                    </span>
+                    <span id="badgeOpenAiStatus" class="text-[10px] px-2 py-0.5 rounded bg-gray-800 text-gray-400 font-bold uppercase">Checking...</span>
+                  </div>
+                  <p class="text-gray-400 text-[11px]">Official OpenAI Whisper-1 audio transcription & autonomous ChatGPT auto-responder.</p>
+                  
+                  <div class="space-y-1">
+                    <label class="block text-gray-400 text-[11px] font-medium">OpenAI API Key</label>
+                    <div class="relative">
+                      <input id="inputOpenAiApiKey" type="password" placeholder="sk-..." class="w-full px-3 py-2 pr-10 rounded-lg bg-gray-950 border border-gray-800 text-white font-mono text-xs focus:outline-none focus:border-purple-500" />
+                      <button type="button" onclick="togglePasswordVisibility('inputOpenAiApiKey', this)" class="absolute right-3 top-2.5 text-gray-500 hover:text-gray-300">
+                        <i class="fa-solid fa-eye"></i>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="flex items-center justify-between pt-1">
+                    <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" class="text-[11px] text-purple-400 hover:text-purple-300 underline flex items-center gap-1">
+                      Get OpenAI key <i class="fa-solid fa-arrow-up-right-from-square text-[9px]"></i>
+                    </a>
+                    <div class="flex gap-2">
+                      <button type="button" onclick="testAiKeyConnection('openai')" class="px-2.5 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-200 font-semibold border border-gray-700 text-[11px] transition">
+                        <i class="fa-solid fa-vial mr-1"></i> Test
+                      </button>
+                      <button type="button" onclick="saveSingleAiKey('openai')" class="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold text-[11px] transition shadow-lg shadow-purple-900/30">
+                        <i class="fa-solid fa-check mr-1"></i> Connect
+                      </button>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -828,6 +899,11 @@ export function renderDashboardHtml(): string {
                   <label class="block text-gray-400 mb-1 font-medium">System Instructions / Prompt</label>
                   <textarea id="settingAiSystemPrompt" rows="3" placeholder="You are a helpful customer support representative..." class="w-full px-3 py-2 rounded-lg bg-gray-900 border border-gray-800 text-white focus:outline-none focus:border-teal-500"></textarea>
                 </div>
+                <div>
+                  <label class="block text-gray-400 mb-1 font-medium">Custom Instance AI API Key (Optional)</label>
+                  <input id="settingAiApiKey" type="password" placeholder="Leave empty to use global AI keys" class="w-full px-3 py-2 rounded-lg bg-gray-900 border border-gray-800 text-white font-mono text-xs focus:outline-none focus:border-teal-500" />
+                  <p class="text-[10px] text-gray-500 mt-1">Leave empty to use the global keys connected in the Media AI Studio tab.</p>
+                </div>
 
                 <button onclick="saveInstanceSettings()" class="w-full py-2.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-white font-bold border border-gray-700 transition mt-2">
                   <i class="fa-solid fa-floppy-disk mr-1"></i> Save Instance Settings
@@ -1038,6 +1114,9 @@ export function renderDashboardHtml(): string {
           if (panel) panel.classList.add('hidden');
         }
       });
+      if (tabKey === 'mediaVoice') {
+        loadSystemAiKeys();
+      }
     }
 
     function switchPairingTab(tab) {
@@ -1228,6 +1307,13 @@ export function renderDashboardHtml(): string {
       document.getElementById('settingAiProvider').value = inst.ai_provider || 'openai';
       document.getElementById('settingAiModel').value = inst.ai_model || '';
       document.getElementById('settingAiSystemPrompt').value = inst.ai_system_prompt || '';
+      const apiKeyEl = document.getElementById('settingAiApiKey');
+      if (apiKeyEl) {
+        apiKeyEl.value = '';
+        apiKeyEl.placeholder = inst.ai_api_key_encrypted
+          ? '•••••••• (Encrypted in DB - enter new key to replace)'
+          : 'Leave empty to use global AI keys';
+      }
       document.getElementById('settingN8nWebhookUrl').value = inst.n8n_webhook_url || '';
       document.getElementById('settingWebhookUrl').value = inst.webhook_url || '';
       document.getElementById('settingWebhookSecret').value = inst.webhook_secret || '';
@@ -1955,20 +2041,24 @@ export function renderDashboardHtml(): string {
       statusEl.innerText = 'Saving instance settings...';
 
       try {
+        const customAiKey = document.getElementById('settingAiApiKey')?.value.trim();
+        const payload = {
+          ai_enabled: document.getElementById('settingAiEnabled').checked,
+          ai_provider: document.getElementById('settingAiProvider').value,
+          ai_model: document.getElementById('settingAiModel').value.trim() || null,
+          ai_system_prompt: document.getElementById('settingAiSystemPrompt').value.trim() || null,
+          reject_calls: document.getElementById('settingRejectCalls').checked,
+          ignore_groups: document.getElementById('settingIgnoreGroups').checked,
+          sandbox_mode: document.getElementById('settingSandboxMode').checked,
+          outbound_per_minute: parseInt(document.getElementById('settingOutboundPerMin').value || '30', 10),
+          proxy_url: document.getElementById('settingProxyUrl').value.trim() || null,
+          ...(customAiKey ? { ai_api_key: customAiKey } : {}),
+        };
+
         const res = await fetch('/api/v1/instances/' + activeInstanceId, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            ai_enabled: document.getElementById('settingAiEnabled').checked,
-            ai_provider: document.getElementById('settingAiProvider').value,
-            ai_model: document.getElementById('settingAiModel').value.trim() || null,
-            ai_system_prompt: document.getElementById('settingAiSystemPrompt').value.trim() || null,
-            reject_calls: document.getElementById('settingRejectCalls').checked,
-            ignore_groups: document.getElementById('settingIgnoreGroups').checked,
-            sandbox_mode: document.getElementById('settingSandboxMode').checked,
-            outbound_per_minute: parseInt(document.getElementById('settingOutboundPerMin').value || '30', 10),
-            proxy_url: document.getElementById('settingProxyUrl').value.trim() || null,
-          })
+          body: JSON.stringify(payload)
         });
         const data = await res.json();
         if (res.ok) {
@@ -2156,9 +2246,132 @@ export function renderDashboardHtml(): string {
       }
     }
 
+    // --- AI & Media API Keys Client Handlers ---
+
+    async function loadSystemAiKeys() {
+      try {
+        const res = await fetch('/api/v1/system/ai-keys');
+        if (!res.ok) return;
+        const data = await res.json();
+        
+        // Groq Badge & Placeholder
+        const groqBadge = document.getElementById('badgeGroqStatus');
+        const groqInput = document.getElementById('inputGroqApiKey');
+        if (groqBadge && data.groq) {
+          if (data.groq.configured) {
+            groqBadge.className = 'text-[10px] px-2 py-0.5 rounded bg-teal-500/20 text-teal-300 border border-teal-500/30 font-bold uppercase flex items-center gap-1';
+            groqBadge.innerHTML = '<i class="fa-solid fa-circle-check text-teal-400"></i> Connected';
+            if (groqInput && !groqInput.value) groqInput.placeholder = data.groq.masked || '••••••••';
+          } else {
+            groqBadge.className = 'text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold uppercase';
+            groqBadge.innerHTML = 'Not Configured';
+            if (groqInput && !groqInput.value) groqInput.placeholder = 'gsk_...';
+          }
+        }
+
+        // OpenAI Badge & Placeholder
+        const openAiBadge = document.getElementById('badgeOpenAiStatus');
+        const openAiInput = document.getElementById('inputOpenAiApiKey');
+        if (openAiBadge && data.openai) {
+          if (data.openai.configured) {
+            openAiBadge.className = 'text-[10px] px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 font-bold uppercase flex items-center gap-1';
+            openAiBadge.innerHTML = '<i class="fa-solid fa-circle-check text-purple-400"></i> Connected';
+            if (openAiInput && !openAiInput.value) openAiInput.placeholder = data.openai.masked || '••••••••';
+          } else {
+            openAiBadge.className = 'text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold uppercase';
+            openAiBadge.innerHTML = 'Not Configured';
+            if (openAiInput && !openAiInput.value) openAiInput.placeholder = 'sk-...';
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load system AI keys:', err);
+      }
+    }
+
+    function togglePasswordVisibility(inputId, btn) {
+      const input = document.getElementById(inputId);
+      if (!input) return;
+      if (input.type === 'password') {
+        input.type = 'text';
+        btn.innerHTML = '<i class="fa-solid fa-eye-slash"></i>';
+      } else {
+        input.type = 'password';
+        btn.innerHTML = '<i class="fa-solid fa-eye"></i>';
+      }
+    }
+
+    async function saveSingleAiKey(provider) {
+      const bar = document.getElementById('aiKeyFeedbackBar');
+      const msg = document.getElementById('aiKeyFeedbackMessage');
+      if (bar) bar.classList.remove('hidden');
+      if (bar) bar.className = 'p-3 rounded-xl border border-blue-500/30 bg-blue-500/10 text-blue-200 text-xs font-medium flex items-center justify-between';
+      if (msg) msg.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Saving ' + provider.toUpperCase() + ' API key...';
+
+      const inputId = provider === 'groq' ? 'inputGroqApiKey' : 'inputOpenAiApiKey';
+      const inputEl = document.getElementById(inputId);
+      const val = inputEl ? inputEl.value.trim() : '';
+
+      try {
+        const payload = {};
+        if (provider === 'groq') payload.groq_api_key = val;
+        if (provider === 'openai') payload.openai_api_key = val;
+
+        const res = await fetch('/api/v1/system/ai-keys', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          if (bar) bar.className = 'p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-xs font-medium flex items-center justify-between';
+          if (msg) msg.innerHTML = '<i class="fa-solid fa-circle-check text-emerald-400"></i> ' + (val ? provider.toUpperCase() + ' key connected and encrypted!' : provider.toUpperCase() + ' key removed.');
+          if (inputEl) inputEl.value = '';
+          await loadSystemAiKeys();
+        } else {
+          if (bar) bar.className = 'p-3 rounded-xl border border-rose-500/30 bg-rose-500/10 text-rose-300 text-xs font-medium flex items-center justify-between';
+          if (msg) msg.innerHTML = '<i class="fa-solid fa-circle-exclamation text-rose-400"></i> ' + (data.error || 'Failed to save key');
+        }
+      } catch (err) {
+        if (bar) bar.className = 'p-3 rounded-xl border border-rose-500/30 bg-rose-500/10 text-rose-300 text-xs font-medium flex items-center justify-between';
+        if (msg) msg.innerHTML = '<i class="fa-solid fa-circle-exclamation text-rose-400"></i> ' + err.message;
+      }
+    }
+
+    async function testAiKeyConnection(provider) {
+      const bar = document.getElementById('aiKeyFeedbackBar');
+      const msg = document.getElementById('aiKeyFeedbackMessage');
+      if (bar) bar.classList.remove('hidden');
+      if (bar) bar.className = 'p-3 rounded-xl border border-blue-500/30 bg-blue-500/10 text-blue-200 text-xs font-medium flex items-center justify-between';
+      if (msg) msg.innerHTML = '<i class="fa-solid fa-spinner animate-spin"></i> Testing live connection with ' + provider.toUpperCase() + ' API...';
+
+      const inputId = provider === 'groq' ? 'inputGroqApiKey' : 'inputOpenAiApiKey';
+      const inputEl = document.getElementById(inputId);
+      const val = inputEl ? inputEl.value.trim() : '';
+
+      try {
+        const res = await fetch('/api/v1/system/test-ai-key', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider, api_key: val || undefined }),
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          if (bar) bar.className = 'p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-xs font-medium flex items-center justify-between';
+          if (msg) msg.innerHTML = '<i class="fa-solid fa-circle-check text-emerald-400"></i> ' + data.message;
+        } else {
+          if (bar) bar.className = 'p-3 rounded-xl border border-rose-500/30 bg-rose-500/10 text-rose-300 text-xs font-medium flex items-center justify-between';
+          if (msg) msg.innerHTML = '<i class="fa-solid fa-circle-xmark text-rose-400"></i> ' + (data.error || 'Connection failed');
+        }
+      } catch (err) {
+        if (bar) bar.className = 'p-3 rounded-xl border border-rose-500/30 bg-rose-500/10 text-rose-300 text-xs font-medium flex items-center justify-between';
+        if (msg) msg.innerHTML = '<i class="fa-solid fa-circle-exclamation text-rose-400"></i> ' + err.message;
+      }
+    }
+
     // Initialize Dashboard
     ensureAuthenticated().then(() => {
       loadInstances();
+      loadSystemAiKeys();
     });
   </script>
 </body>

@@ -202,6 +202,12 @@ export const SQL_INIT_TABLES = `
     PRIMARY KEY(instance_id, key_type, key_id)
   );
 
+  CREATE TABLE IF NOT EXISTS system_settings (
+    key TEXT PRIMARY KEY,
+    value_encrypted TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_users_org ON users(org_id);
   CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
   CREATE INDEX IF NOT EXISTS idx_messages_instance_remote ON messages(instance_id, remote_jid);

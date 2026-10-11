@@ -27,10 +27,9 @@ WORKDIR /app
 # Install ffmpeg for voice note audio conversion and curl for healthchecks
 RUN apk add --no-cache ffmpeg curl
 
-# Hugging Face Spaces requires running as non-root user (UID 1000)
-RUN adduser -D -u 1000 user && \
-    mkdir -p /app/data /app/data/media /app/data/sessions && \
-    chown -R user:user /app
+# node:20-alpine already includes the 'node' user with UID/GID 1000
+RUN mkdir -p /app/data /app/data/media /app/data/sessions && \
+    chown -R node:node /app
 
 ENV NODE_ENV=production
 ENV PORT=7860
@@ -39,12 +38,12 @@ ENV UNIFIED_MODE=true
 ENV SQLITE_DB_PATH=/app/data/gateway.db
 
 # Copy compiled dist and production dependencies
-COPY --chown=user:user package*.json ./
-COPY --chown=user:user --from=builder /app/node_modules ./node_modules
-COPY --chown=user:user --from=builder /app/dist ./dist
-COPY --chown=user:user templates ./templates
+COPY --chown=node:node package*.json ./
+COPY --chown=node:node --from=builder /app/node_modules ./node_modules
+COPY --chown=node:node --from=builder /app/dist ./dist
+COPY --chown=node:node templates ./templates
 
-USER user
+USER node
 
 EXPOSE 7860 10000 3000
 

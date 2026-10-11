@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: whatsapp-ai-gateway-v2
+    env: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: UNIFIED_MODE
+        value: true
+      - key: SQLITE_DB_PATH
+        value: /app/data/gateway.db

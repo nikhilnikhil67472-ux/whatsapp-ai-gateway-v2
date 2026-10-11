@@ -238,16 +238,16 @@ docker compose up -d
 
 ---
 
-### Target 2: Render.com (1-Click Blueprint or Docker)
+### Target 2: Render.com (1-Click Blueprint, Docker, or Native Node.js)
 
 Deploy effortlessly on Render with zero configuration errors:
 
 #### Method A: Using `render.yaml` Blueprint (Automated)
 1. Fork or push this repository to GitHub.
 2. In Render Dashboard, click **New +** -> **Blueprint**.
-3. Connect this repository. Render automatically reads `render.yaml`, configures the Docker build, health check (`/health`), and dynamic port binding.
+3. Connect this repository. Render automatically reads `render.yaml`, configures the build, health check (`/health`), dynamic port binding (`PORT`), and persistent storage options.
 
-#### Method B: Manual Docker Web Service
+#### Method B: Manual Docker Web Service (Recommended for zero-dependency ffmpeg)
 1. In Render Dashboard, click **New +** -> **Web Service** -> **Build and deploy from a Git repository**.
 2. Environment: **Docker**
 3. Docker Command: (leave empty, uses Dockerfile)
@@ -256,7 +256,21 @@ Deploy effortlessly on Render with zero configuration errors:
    - `NODE_ENV`: `production`
    - `UNIFIED_MODE`: `true`
    - `SQLITE_DB_PATH`: `/app/data/gateway.db`
+   - `MEDIA_STORAGE_PATH`: `/app/data/media`
    - `ADMIN_API_KEY`: `wag_admin_secret_key_12345` (or your custom secret)
+
+#### Method C: Native Node.js Web Service (Zero Docker)
+1. In Render Dashboard, click **New +** -> **Web Service** -> **Build and deploy from a Git repository**.
+2. Environment: **Node**
+3. Build Command: `npm install && npm run build`
+4. Start Command: `npm start`
+5. Health Check Path: `/health`
+6. Environment Variables:
+   - `NODE_ENV`: `production`
+   - `NODE_VERSION`: `20.18.0` (or >= 20.0.0)
+   - `UNIFIED_MODE`: `true`
+   - `SQLITE_DB_PATH`: `data/gateway.db`
+   - `ADMIN_API_KEY`: `wag_admin_secret_key_12345`
 
 > 💡 **Production Tip for Render**: Render free web services restart when idle and have ephemeral filesystems. For production persistence, upgrade to Render Starter plan ($7/mo) and attach a Persistent Disk (`/app/data`, size: 1GB) so SQLite sessions never reset across restarts.
 
@@ -326,12 +340,15 @@ npm start
 ```
 
 #### 3. Production Process Management with PM2
-To keep the gateway running 24/7 with automatic crash recovery:
+To keep the gateway running 24/7 with automatic crash recovery, use the included `ecosystem.config.cjs`:
 ```bash
 # Install PM2 globally
 npm install -g pm2
 
-# Start unified gateway process
+# Start using pre-configured ecosystem (pins single-process fork mode for SQLite & WebSocket safety)
+pm2 start ecosystem.config.cjs
+
+# Or start directly with CLI
 pm2 start dist/index.js --name "whatsapp-ai-gateway"
 
 # Save PM2 process list and configure system startup
@@ -343,7 +360,7 @@ pm2 startup
 If scaling high message volume across multiple CPU cores:
 ```bash
 # Process 1: REST API Server & Dashboard UI
-PORT=800 UNIFIED_MODE=false pm2 start dist/server/index.js --name "wag-web"
+PORT=3000 UNIFIED_MODE=false pm2 start dist/server/index.js --name "wag-web"
 
 # Process 2: Baileys WhatsApp Connection Manager & Outbound Queue Worker
 UNIFIED_MODE=false pm2 start dist/worker/index.js --name "wag-worker"
@@ -354,14 +371,16 @@ UNIFIED_MODE=false pm2 start dist/worker/index.js --name "wag-worker"
 ### Target 6: Fly.io / Koyeb / Zeabur / Coolify / CapRover
 
 All standard container runtimes work directly with the included multi-stage `Dockerfile`:
-- **Fly.io**:
+- **Fly.io** (Blueprint template included in `fly.toml.example`):
   ```bash
-  fly launch --no-deploy
+  # Copy template
+  cp fly.toml.example fly.toml
+  # Create persistent volume for SQLite & media
   fly volumes create gateway_data --size 1
-  # In fly.toml, mount gateway_data to /app/data
+  # Deploy container
   fly deploy
   ```
-- **Koyeb / Zeabur / Coolify**: Select GitHub repo -> Deploy Dockerfile -> Set persistent volume to `/app/data`.
+- **Koyeb / Zeabur / Coolify**: Select GitHub repo -> Deploy Dockerfile -> Set persistent volume mount to `/app/data` -> Health check: `/health`.
 
 ---
 

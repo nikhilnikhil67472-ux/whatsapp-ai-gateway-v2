@@ -223,13 +223,26 @@ export class GatewayDatabase {
         fs.mkdirSync(dbDir, { recursive: true });
       }
       this.db = new Database(dbFilePath);
+
+      // Attempt WAL mode; fall back gracefully to DELETE mode if filesystem does not support POSIX shared memory (e.g., NFS, SMB, or network mounts)
+      try {
+        this.db.pragma('journal_mode = WAL');
+      } catch (walErr: any) {
+        console.warn(`[Database] WAL journal mode unavailable (${walErr?.message || walErr}). Falling back to DELETE mode.`);
+        this.db.pragma('journal_mode = DELETE');
+      }
+
+      this.db.pragma('foreign_keys = ON');
+      this.db.pragma('busy_timeout = 5000');
+      this.init();
     } catch (err: any) {
       if (
         err.code === 'EACCES' ||
         err.code === 'EPERM' ||
         err.message?.includes('readonly') ||
         err.message?.includes('permission') ||
-        err.message?.includes('unable to open database file')
+        err.message?.includes('unable to open database file') ||
+        err.message?.includes('disk I/O error')
       ) {
         console.error(`\n[FATAL] Database access error for "${dbFilePath}": ${err.message}`);
         console.error(`[FATAL] Check write permissions for directory "${dbDir}".`);
@@ -237,11 +250,6 @@ export class GatewayDatabase {
       }
       throw err;
     }
-
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('foreign_keys = ON');
-    this.db.pragma('busy_timeout = 5000');
-    this.init();
   }
 
   public init(): void {

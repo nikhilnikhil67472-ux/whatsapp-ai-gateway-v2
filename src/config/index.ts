@@ -12,7 +12,7 @@ if (fs.existsSync(envPath)) {
 
 export const config = {
   env: process.env.NODE_ENV || 'development',
-  port: parseInt(process.env.PORT || '3000', 10),
+  port: Number.isInteger(parseInt(process.env.PORT || '3000', 10)) ? parseInt(process.env.PORT || '3000', 10) : 3000,
   host: process.env.HOST || '0.0.0.0',
   appBaseUrl: process.env.APP_BASE_URL || 'http://localhost:3000',
   unifiedMode: process.env.UNIFIED_MODE !== 'false', // Default to true for easy single-process run
@@ -21,6 +21,18 @@ export const config = {
   sqliteDbPath: process.env.SQLITE_DB_PATH
     ? path.resolve(process.cwd(), process.env.SQLITE_DB_PATH)
     : path.resolve(process.cwd(), 'data', 'gateway.db'),
+
+  // Media Storage (defaults to 'media' subfolder alongside SQLite database or MEDIA_STORAGE_PATH)
+  mediaStoragePath: process.env.MEDIA_STORAGE_PATH
+    ? path.resolve(process.cwd(), process.env.MEDIA_STORAGE_PATH)
+    : path.join(
+        path.dirname(
+          process.env.SQLITE_DB_PATH
+            ? path.resolve(process.cwd(), process.env.SQLITE_DB_PATH)
+            : path.resolve(process.cwd(), 'data', 'gateway.db')
+        ),
+        'media'
+      ),
 
   // Security
   encryptionKey: process.env.ENCRYPTION_KEY || 'whatsapp-gateway-super-secret-key-32ch',

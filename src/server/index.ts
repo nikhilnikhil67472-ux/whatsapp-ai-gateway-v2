@@ -15,7 +15,7 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Serve decrypted media files
-const mediaDir = path.resolve(process.cwd(), 'data', 'media');
+const mediaDir = config.mediaStoragePath;
 if (!fs.existsSync(mediaDir)) {
   fs.mkdirSync(mediaDir, { recursive: true });
 }
@@ -167,16 +167,18 @@ app.get('/api-docs', (req: Request, res: Response) => {
   res.json(openApiSpec);
 });
 
+let activeServer: import('http').Server | null = null;
+
 export function startWebServer(): Promise<void> {
   return new Promise((resolve, reject) => {
-    const server = app.listen(config.port, config.host, () => {
+    activeServer = app.listen(config.port, config.host, () => {
       console.log(`[Web Server] WhatsApp AI Gateway v2 running at http://${config.host === '0.0.0.0' ? 'localhost' : config.host}:${config.port}`);
       console.log(`[Web Server] Dashboard UI: http://localhost:${config.port}/dashboard`);
       console.log(`[Web Server] REST API Base: http://localhost:${config.port}/api/v1`);
       resolve();
     });
 
-    server.on('error', (err: any) => {
+    activeServer.on('error', (err: any) => {
       if (err.code === 'EADDRINUSE') {
         console.error(`\n[FATAL] Port ${config.port} is already in use by another process.`);
         console.error(`[FATAL] Specify a different port using the PORT environment variable (e.g., PORT=3000 or PORT=8080).\n`);
@@ -186,6 +188,19 @@ export function startWebServer(): Promise<void> {
       }
       reject(err);
     });
+  });
+}
+
+export function stopWebServer(): Promise<void> {
+  return new Promise((resolve) => {
+    if (activeServer) {
+      activeServer.close(() => {
+        activeServer = null;
+        resolve();
+      });
+    } else {
+      resolve();
+    }
   });
 }
 

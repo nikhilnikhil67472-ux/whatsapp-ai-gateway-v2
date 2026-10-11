@@ -13,6 +13,7 @@ services:
       - HOST=0.0.0.0
       - UNIFIED_MODE=true
       - SQLITE_DB_PATH=/app/data/gateway.db
+      - MEDIA_STORAGE_PATH=/app/data/media
       - ADMIN_API_KEY=${ADMIN_API_KEY:-wag_admin_secret_key_12345}
       - JWT_SECRET=${JWT_SECRET:-wag_supersecret_jwt_hmac_key_2026_xyz}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
@@ -27,4 +28,4 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 15s

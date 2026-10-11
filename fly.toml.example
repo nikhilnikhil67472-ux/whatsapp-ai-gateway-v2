@@ -1,0 +1,40 @@
+# ==============================================================================
+# Fly.io Configuration Blueprint (fly.toml.example)
+# Rename to fly.toml and adjust app name before running: fly deploy
+# ==============================================================================
+app = "whatsapp-ai-gateway"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  HOST = "0.0.0.0"
+  NODE_ENV = "production"
+  UNIFIED_MODE = "true"
+  SQLITE_DB_PATH = "/app/data/gateway.db"
+  MEDIA_STORAGE_PATH = "/app/data/media"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 250
+    soft_limit = 200
+
+[[http_service.checks]]
+  grace_period = "15s"
+  interval = "30s"
+  method = "GET"
+  timeout = "5s"
+  path = "/health"
+
+[mounts]
+  source = "gateway_data"
+  destination = "/app/data"

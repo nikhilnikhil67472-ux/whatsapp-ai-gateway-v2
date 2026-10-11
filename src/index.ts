@@ -1,5 +1,5 @@
 import { config } from './config/index.js';
-import { startWebServer } from './server/index.js';
+import { startWebServer, stopWebServer } from './server/index.js';
 import { startWorker, stopWorker } from './worker/index.js';
 
 async function bootstrap() {
@@ -28,6 +28,7 @@ async function bootstrap() {
     if (config.unifiedMode) {
       await stopWorker();
     }
+    await stopWebServer();
     console.log('[Gateway] Shutdown complete. Goodbye!');
     process.exit(0);
   };

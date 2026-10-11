@@ -1,4 +1,5 @@
 services:
+  # Option 1: Docker Runtime (Recommended for zero-dependency native SQLite & ffmpeg)
   - type: web
     name: whatsapp-ai-gateway-v2
     env: docker
@@ -12,6 +13,8 @@ services:
         value: true
       - key: SQLITE_DB_PATH
         value: /app/data/gateway.db
+      - key: MEDIA_STORAGE_PATH
+        value: /app/data/media
       - key: PORT
         value: 10000
     # For production persistent SQLite storage (Render Starter plan or above):
@@ -19,3 +22,22 @@ services:
     #   name: gateway-data
     #   mountPath: /app/data
     #   sizeGB: 1
+
+  # Option 2: Native Node.js Runtime (Alternative)
+  # To use Native Node on Render, uncomment the service below and comment Option 1:
+  # - type: web
+  #   name: whatsapp-ai-gateway-v2-node
+  #   env: node
+  #   plan: free
+  #   buildCommand: npm install && npm run build
+  #   startCommand: npm start
+  #   healthCheckPath: /health
+  #   envVars:
+  #     - key: NODE_ENV
+  #       value: production
+  #     - key: UNIFIED_MODE
+  #       value: true
+  #     - key: SQLITE_DB_PATH
+  #       value: data/gateway.db
+  #     - key: PORT
+  #       value: 10000

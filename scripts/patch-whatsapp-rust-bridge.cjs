@@ -2,12 +2,19 @@ const fs = require('fs');
 const path = require('path');
 
 function patchRustBridge() {
-  const possiblePaths = [
-    path.join(process.cwd(), 'node_modules', '@whiskeysockets', 'baileys', 'node_modules', 'whatsapp-rust-bridge', 'package.json'),
-    path.join(process.cwd(), 'node_modules', 'whatsapp-rust-bridge', 'package.json')
-  ];
+  const rootDirs = [process.cwd(), path.resolve(__dirname, '..')];
+  const possiblePaths = [];
 
-  for (const pkgPath of possiblePaths) {
+  for (const root of rootDirs) {
+    possiblePaths.push(
+      path.join(root, 'node_modules', '@whiskeysockets', 'baileys', 'node_modules', 'whatsapp-rust-bridge', 'package.json'),
+      path.join(root, 'node_modules', 'whatsapp-rust-bridge', 'package.json')
+    );
+  }
+
+  const uniquePaths = Array.from(new Set(possiblePaths));
+
+  for (const pkgPath of uniquePaths) {
     if (fs.existsSync(pkgPath)) {
       try {
         const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));

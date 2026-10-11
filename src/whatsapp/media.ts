@@ -88,7 +88,7 @@ export async function downloadInboundMedia(params: {
       : `${params.mediaType}_${Date.now()}.${ext}`;
 
     const safeRemote = params.remoteJid.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const mediaDir = path.resolve(process.cwd(), 'data', 'media', params.instanceId, safeRemote, params.messageId);
+    const mediaDir = path.join(config.mediaStoragePath, params.instanceId, safeRemote, params.messageId);
 
     if (!fs.existsSync(mediaDir)) {
       fs.mkdirSync(mediaDir, { recursive: true });

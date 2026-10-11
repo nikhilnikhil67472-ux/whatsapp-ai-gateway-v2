@@ -12,3 +12,10 @@ services:
         value: true
       - key: SQLITE_DB_PATH
         value: /app/data/gateway.db
+      - key: PORT
+        value: 10000
+    # For production persistent SQLite storage (Render Starter plan or above):
+    # disk:
+    #   name: gateway-data
+    #   mountPath: /app/data
+    #   sizeGB: 1

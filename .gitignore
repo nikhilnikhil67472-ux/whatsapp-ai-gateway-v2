@@ -1,6 +1,10 @@
 node_modules/
 dist/
-data/
+data/*
+!data/.gitkeep
+!data/media/
+data/media/*
+!data/media/.gitkeep
 .env
 .env.local
 npm-debug.log*

@@ -194,7 +194,7 @@ Run the full end-to-end automated test suite:
 npm test
 ```
 
-All 50 test suites verify:
+All 70 automated tests verify:
 - REST API Auth, Master Key, and Scoped API keys
 - AES-256-GCM Encryption and HMAC-SHA256 Webhook signatures
 - Multi-Tenant Workspace Isolation
@@ -209,4 +209,172 @@ All 50 test suites verify:
 - Server-Sent Events (SSE) Real-Time Live Stream
 - Model Context Protocol (MCP) JSON-RPC 2.0 tool execution
 - n8n Community Node 6-Resource Ecosystem (`n8n-nodes-whatsapp-ai-gateway`)
+
+---
+
+## 🚀 Multi-Platform Deployment Guide
+
+WhatsApp AI Gateway v2 is engineered for 100% plug-and-play multi-platform compatibility across container runtimes and bare-metal environments.
+
+### Target 1: Docker & Docker Compose (Recommended for VPS / Local)
+
+Single command spin-up on any Linux VPS, macOS, or Windows host:
+
+```bash
+# 1. Clone repository
+git clone https://github.com/nikhilnikhil67472-ux/whatsapp-ai-gateway-v2.git
+cd whatsapp-ai-gateway-v2
+
+# 2. Configure environment (optional, sane defaults already provided)
+cp .env.example .env
+
+# 3. Spin up container in detached mode
+docker compose up -d
+```
+
+- **Persistent Storage**: SQLite database, media, and session keys are saved automatically to `./data/` on the host.
+- **Port Customization**: By default, the gateway listens on port `800`. To change port, simply set `PORT=3000` or `PORT=8080` in `.env` before running `docker compose up -d`.
+- **Health Check**: Automated health checking via `curl -f http://localhost:${PORT}/health`.
+
+---
+
+### Target 2: Render.com (1-Click Blueprint or Docker)
+
+Deploy effortlessly on Render with zero configuration errors:
+
+#### Method A: Using `render.yaml` Blueprint (Automated)
+1. Fork or push this repository to GitHub.
+2. In Render Dashboard, click **New +** -> **Blueprint**.
+3. Connect this repository. Render automatically reads `render.yaml`, configures the Docker build, health check (`/health`), and dynamic port binding.
+
+#### Method B: Manual Docker Web Service
+1. In Render Dashboard, click **New +** -> **Web Service** -> **Build and deploy from a Git repository**.
+2. Environment: **Docker**
+3. Docker Command: (leave empty, uses Dockerfile)
+4. Health Check Path: `/health`
+5. Environment Variables:
+   - `NODE_ENV`: `production`
+   - `UNIFIED_MODE`: `true`
+   - `SQLITE_DB_PATH`: `/app/data/gateway.db`
+   - `ADMIN_API_KEY`: `wag_admin_secret_key_12345` (or your custom secret)
+
+> 💡 **Production Tip for Render**: Render free web services restart when idle and have ephemeral filesystems. For production persistence, upgrade to Render Starter plan ($7/mo) and attach a Persistent Disk (`/app/data`, size: 1GB) so SQLite sessions never reset across restarts.
+
+---
+
+### Target 3: Hugging Face Spaces (Docker Space)
+
+This repository includes native Hugging Face Spaces metadata and UID 1000 compatibility:
+
+1. Create a new Space on [Hugging Face](https://huggingface.co/spaces).
+2. Space SDK: **Docker** (Blank)
+3. Clone the Space or push this repo directly to your Space repository:
+   ```bash
+   git remote add space https://huggingface.co/spaces/YOUR_USERNAME/YOUR_SPACE_NAME
+   git push space main
+   ```
+4. **UID 1000 Compliant**: Hugging Face runs containers with non-root user UID 1000. Our Dockerfile leverages Alpine's built-in `node:node` (UID 1000) with permissions pre-configured for `/app/data`.
+5. **Port 7860 Compliant**: Dockerfile sets `ENV PORT=7860` and the README frontmatter declares `app_port: 7860` for seamless web interface loading.
+
+---
+
+### Target 4: Railway.app
+
+Deploy with zero configuration via the included `railway.json`:
+
+1. In Railway, click **New Project** -> **Deploy from GitHub repo**.
+2. Select `whatsapp-ai-gateway-v2`.
+3. Railway automatically detects `railway.json` and builds via `Dockerfile`.
+4. Add a Persistent Volume in Railway:
+   - Go to service settings -> **Volumes** -> **Add Volume**.
+   - Mount path: `/app/data`.
+5. Add environment variables:
+   - `ADMIN_API_KEY`: your secret key
+   - `ENCRYPTION_KEY`: 32-character encryption key
+   - (Optional) `GROQ_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`
+
+---
+
+### Target 5: Bare Metal Node.js / Linux VPS / PM2 / systemd
+
+If you prefer running directly on a Linux VPS (Ubuntu / Debian / CentOS), macOS, or Windows without Docker:
+
+#### 1. Prerequisites
+- Node.js >= 20.0.0
+- Build tools (for better-sqlite3 native compilation):
+  - **Ubuntu / Debian**: `sudo apt update && sudo apt install -y build-essential python3 ffmpeg curl`
+  - **CentOS / RHEL**: `sudo yum groupinstall "Development Tools" && sudo yum install -y python3 ffmpeg curl`
+  - **macOS**: `xcode-select --install && brew install ffmpeg`
+
+#### 2. Install & Compile
+```bash
+# Clone and enter directory
+git clone https://github.com/nikhilnikhil67472-ux/whatsapp-ai-gateway-v2.git
+cd whatsapp-ai-gateway-v2
+
+# Copy .env
+cp .env.example .env
+
+# Install dependencies (runs postinstall rust bridge patch automatically)
+npm install
+
+# Compile TypeScript to dist/
+npm run build
+
+# Start production gateway
+npm start
+```
+
+#### 3. Production Process Management with PM2
+To keep the gateway running 24/7 with automatic crash recovery:
+```bash
+# Install PM2 globally
+npm install -g pm2
+
+# Start unified gateway process
+pm2 start dist/index.js --name "whatsapp-ai-gateway"
+
+# Save PM2 process list and configure system startup
+pm2 save
+pm2 startup
+```
+
+#### 4. Decoupled Architecture (Optional)
+If scaling high message volume across multiple CPU cores:
+```bash
+# Process 1: REST API Server & Dashboard UI
+PORT=800 UNIFIED_MODE=false pm2 start dist/server/index.js --name "wag-web"
+
+# Process 2: Baileys WhatsApp Connection Manager & Outbound Queue Worker
+UNIFIED_MODE=false pm2 start dist/worker/index.js --name "wag-worker"
+```
+
+---
+
+### Target 6: Fly.io / Koyeb / Zeabur / Coolify / CapRover
+
+All standard container runtimes work directly with the included multi-stage `Dockerfile`:
+- **Fly.io**:
+  ```bash
+  fly launch --no-deploy
+  fly volumes create gateway_data --size 1
+  # In fly.toml, mount gateway_data to /app/data
+  fly deploy
+  ```
+- **Koyeb / Zeabur / Coolify**: Select GitHub repo -> Deploy Dockerfile -> Set persistent volume to `/app/data`.
+
+---
+
+## 🛠️ Multi-Platform Troubleshooting & Production FAQ
+
+| Issue | Root Cause | Solution |
+| :--- | :--- | :--- |
+| **`Error: listen EADDRINUSE: address already in use 0.0.0.0:800`** | Port 800 is already occupied by another process on host. | Change `PORT=3000` or `PORT=8080` in `.env` or set environment variable `PORT`. |
+| **`Error: listen EACCES: permission denied 0.0.0.0:800`** | Ports < 1024 require root/sudo privileges on Linux. | Use an unprivileged port like `PORT=3000` or `PORT=8080`, or run with sudo. |
+| **`SqliteError: unable to open database file` on Docker Linux** | Host volume `./data` was created as `root:root` before container start. | Run `sudo chown -R 1000:1000 ./data` on the host. In our latest repo, `data/.gitkeep` prevents this by pre-creating the directory with current user permissions. |
+| **`postinstall` script failed during `npm ci` in Docker** | `scripts/` folder was not copied before running `npm ci`. | Resolved: `Dockerfile` copies `scripts/` before running `npm ci`. |
+| **Alpine Linux user creation collision (`adduser -D -u 1000`)** | `node:20-alpine` already includes built-in `node` user with UID 1000. | Resolved: `Dockerfile` leverages built-in `USER node` directly. |
+| **WhatsApp disconnected on container restart** | Ephemeral container filesystem lost SQLite database file. | Mount persistent storage for `/app/data` (e.g., `-v ./data:/app/data` in Docker or Persistent Volume in cloud host). |
+| **Audio Voice Note (.ogg) conversion fails** | `ffmpeg` is missing on the host system. | In Docker, `ffmpeg` is pre-installed. On bare metal, install via `apt install ffmpeg` or `brew install ffmpeg`. |
+
 

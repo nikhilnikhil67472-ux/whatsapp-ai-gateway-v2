@@ -168,12 +168,23 @@ app.get('/api-docs', (req: Request, res: Response) => {
 });
 
 export function startWebServer(): Promise<void> {
-  return new Promise((resolve) => {
-    app.listen(config.port, config.host, () => {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(config.port, config.host, () => {
       console.log(`[Web Server] WhatsApp AI Gateway v2 running at http://${config.host === '0.0.0.0' ? 'localhost' : config.host}:${config.port}`);
       console.log(`[Web Server] Dashboard UI: http://localhost:${config.port}/dashboard`);
       console.log(`[Web Server] REST API Base: http://localhost:${config.port}/api/v1`);
       resolve();
+    });
+
+    server.on('error', (err: any) => {
+      if (err.code === 'EADDRINUSE') {
+        console.error(`\n[FATAL] Port ${config.port} is already in use by another process.`);
+        console.error(`[FATAL] Specify a different port using the PORT environment variable (e.g., PORT=3000 or PORT=8080).\n`);
+      } else if (err.code === 'EACCES') {
+        console.error(`\n[FATAL] Permission denied binding to ${config.host}:${config.port}.`);
+        console.error(`[FATAL] Ports below 1024 require elevated privileges on Unix/Linux systems. Run with sudo or set PORT=3000/8080.\n`);
+      }
+      reject(err);
     });
   });
 }

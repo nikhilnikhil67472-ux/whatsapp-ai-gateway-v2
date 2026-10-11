@@ -217,11 +217,27 @@ export class GatewayDatabase {
   constructor(customPath?: string) {
     const dbFilePath = customPath || config.sqliteDbPath;
     const dbDir = path.dirname(dbFilePath);
-    if (!fs.existsSync(dbDir)) {
-      fs.mkdirSync(dbDir, { recursive: true });
+
+    try {
+      if (!fs.existsSync(dbDir)) {
+        fs.mkdirSync(dbDir, { recursive: true });
+      }
+      this.db = new Database(dbFilePath);
+    } catch (err: any) {
+      if (
+        err.code === 'EACCES' ||
+        err.code === 'EPERM' ||
+        err.message?.includes('readonly') ||
+        err.message?.includes('permission') ||
+        err.message?.includes('unable to open database file')
+      ) {
+        console.error(`\n[FATAL] Database access error for "${dbFilePath}": ${err.message}`);
+        console.error(`[FATAL] Check write permissions for directory "${dbDir}".`);
+        console.error(`[FATAL] If running in Docker, ensure the mounted volume has UID 1000 permissions (e.g. run "chown -R 1000:1000 ./data" or "chmod -R 777 ./data").\n`);
+      }
+      throw err;
     }
 
-    this.db = new Database(dbFilePath);
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
     this.db.pragma('busy_timeout = 5000');

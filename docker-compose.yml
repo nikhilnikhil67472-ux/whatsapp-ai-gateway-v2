@@ -1,0 +1,30 @@
+services:
+  whatsapp-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: whatsapp-ai-gateway:v2.0.0
+    container_name: whatsapp-ai-gateway
+    restart: unless-stopped
+    ports:
+      - "800:800"
+    environment:
+      - PORT=800
+      - HOST=0.0.0.0
+      - UNIFIED_MODE=true
+      - SQLITE_DB_PATH=/app/data/gateway.db
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-wag_admin_secret_key_12345}
+      - JWT_SECRET=${JWT_SECRET:-wag_supersecret_jwt_hmac_key_2026_xyz}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    volumes:
+      # Persistent local storage for SQLite database and media
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:800/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

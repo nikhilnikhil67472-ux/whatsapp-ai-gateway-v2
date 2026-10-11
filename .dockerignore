@@ -1,0 +1,10 @@
+node_modules
+npm-debug.log
+data/*.db*
+data/media/*
+data/sessions/*
+tests
+.git
+.github
+.vscode
+*.log

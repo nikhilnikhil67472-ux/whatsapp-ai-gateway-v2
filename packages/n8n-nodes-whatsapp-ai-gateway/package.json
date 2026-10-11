@@ -1,0 +1,46 @@
+{
+  "name": "n8n-nodes-whatsapp-ai-gateway",
+  "version": "1.0.0",
+  "description": "Official n8n community node for WhatsApp AI Gateway v2 - Send messages, media, buttons, lists, and receive incoming WhatsApp events",
+  "keywords": [
+    "n8n-community-node-package",
+    "whatsapp",
+    "whatsapp-api",
+    "baileys",
+    "ai-agent",
+    "openai",
+    "claude",
+    "automation"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/nikhil/whatsapp-ai-gateway-v2",
+  "author": {
+    "name": "WhatsApp AI Gateway Team"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nikhil/whatsapp-ai-gateway-v2.git"
+  },
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "files": [
+    "dist"
+  ],
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": [
+      "dist/credentials/WhatsAppAiGatewayApi.credentials.js"
+    ],
+    "nodes": [
+      "dist/nodes/WhatsAppAiGateway/WhatsAppAiGateway.node.js",
+      "dist/nodes/WhatsAppAiGatewayTrigger/WhatsAppAiGatewayTrigger.node.js"
+    ]
+  },
+  "devDependencies": {
+    "n8n-workflow": "^1.40.0",
+    "typescript": "^5.7.3"
+  }
+}

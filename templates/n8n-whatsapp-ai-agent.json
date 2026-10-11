@@ -1,0 +1,162 @@
+{
+  "name": "WhatsApp AI Gateway v2 - Autonomous Customer Support Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-inbound",
+        "options": {}
+      },
+      "id": "1",
+      "name": "WhatsApp Inbound Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "whatsapp-inbound-agent"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract incoming message metadata from WhatsApp AI Gateway payload\nconst payload = $input.first().json;\nconst message = payload.message || payload.data?.message || {};\nconst instance = payload.instance || {};\n\n// Skip outbound echoes or empty notifications\nif (!message.remoteJid || (!message.text && !message.caption && !message.mediaUrl)) {\n  return [];\n}\n\nreturn [{\n  json: {\n    instanceId: instance.id || 'default',\n    senderJid: message.remoteJid,\n    senderName: message.pushName || 'Customer',\n    userMessage: (message.text || message.caption || '').trim(),\n    messageType: message.type || 'text',\n    mediaUrl: message.mediaUrl || null,\n    timestamp: message.timestamp\n  }\n}];"
+      },
+      "id": "2",
+      "name": "Extract Message Metadata",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "options": {
+          "systemMessage": "You are a friendly, intelligent customer service AI on WhatsApp for an online store. Keep responses helpful, empathetic, concise, and formatted for WhatsApp (use *bold* and bullet points where helpful). If the user asks about orders, provide a clear status update."
+        }
+      },
+      "id": "3",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [
+        680,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.userMessage }}"
+      },
+      "id": "4",
+      "name": "AI Agent Assistant",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.6,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://whatsapp-gateway:800/api/v1/whatsapp/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_GATEWAY_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "instance_id",
+              "value": "={{ $('Extract Message Metadata').item.json.instanceId }}"
+            },
+            {
+              "name": "remote_jid",
+              "value": "={{ $('Extract Message Metadata').item.json.senderJid }}"
+            },
+            {
+              "name": "type",
+              "value": "text"
+            },
+            {
+              "name": "text",
+              "value": "={{ $json.output }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "5",
+      "name": "Send Reply via WhatsApp Gateway",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        920,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "WhatsApp Inbound Webhook": {
+      "main": [
+        [
+          {
+            "node": "Extract Message Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Message Metadata": {
+      "main": [
+        [
+          {
+            "node": "AI Agent Assistant",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent Assistant",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent Assistant": {
+      "main": [
+        [
+          {
+            "node": "Send Reply via WhatsApp Gateway",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

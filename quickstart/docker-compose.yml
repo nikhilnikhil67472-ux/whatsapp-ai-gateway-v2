@@ -1,0 +1,22 @@
+services:
+  whatsapp-gateway:
+    image: ghcr.io/nikhilnikhil67472-ux/whatsapp-ai-gateway-v2:latest
+    container_name: whatsapp-ai-gateway
+    restart: unless-stopped
+    ports:
+      - "800:7860"
+    environment:
+      - PORT=7860
+      - HOST=0.0.0.0
+      - UNIFIED_MODE=true
+      - SQLITE_DB_PATH=/app/data/gateway.db
+      - MEDIA_STORAGE_PATH=/app/data/media
+      - ADMIN_API_KEY=wag_admin_secret_key_12345
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:7860/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

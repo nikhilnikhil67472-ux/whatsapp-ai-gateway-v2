@@ -38,6 +38,11 @@ app.get('/health', (req: Request, res: Response) => {
   }
 });
 
+// Lightweight ping endpoint for uptime monitors
+app.get('/ping', (req: Request, res: Response) => {
+  res.type('text/plain').send('pong');
+});
+
 // Interactive Dashboard UI
 app.get('/', (req: Request, res: Response) => {
   res.setHeader('Content-Type', 'text/html');

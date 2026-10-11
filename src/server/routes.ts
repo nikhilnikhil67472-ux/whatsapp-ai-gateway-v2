@@ -43,13 +43,17 @@ declare global {
 
 export const apiRouter = Router();
 
-// --- Public Health Endpoint ---
+// --- Public Health & Ping Endpoints ---
 apiRouter.get('/health', (req: Request, res: Response) => {
   res.json({
     status: 'healthy',
     version: '2.0.0',
     timestamp: new Date().toISOString(),
   });
+});
+
+apiRouter.get('/ping', (req: Request, res: Response) => {
+  res.type('text/plain').send('pong');
 });
 
 export function normalizeWebhookUrl(raw: unknown): string | null {

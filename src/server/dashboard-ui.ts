@@ -773,7 +773,8 @@ export function renderDashboardHtml(): string {
                   <div id="mockupMsgCard" class="rounded-xl bg-[#005c4b] text-white p-3 space-y-2 shadow">
                     <div id="mockupBody" class="text-[12px] whitespace-pre-wrap leading-relaxed">Hello! Welcome to our automated WhatsApp service.</div>
                     <div id="mockupMediaBox" class="hidden rounded-lg overflow-hidden border border-emerald-700/50 bg-[#023328] p-2 text-center text-emerald-200">
-                      <i class="fa-solid fa-photo-film text-xl mb-1"></i>
+                      <img id="mockupMediaImg" src="" class="hidden max-h-48 w-full object-cover rounded-md mb-1.5" onerror="this.classList.add('hidden'); if(document.getElementById('mockupMediaIcon')) document.getElementById('mockupMediaIcon').classList.remove('hidden');" />
+                      <i id="mockupMediaIcon" class="fa-solid fa-photo-film text-xl mb-1"></i>
                       <div id="mockupMediaText" class="text-[11px] font-mono truncate">[Media Attachment]</div>
                     </div>
                   </div>
@@ -1797,6 +1798,20 @@ export function renderDashboardHtml(): string {
         const mUrl = document.getElementById('sbMediaUrl')?.value.trim() || '';
         const mCaption = document.getElementById('sbMediaCaption')?.value.trim() || '';
         const isPtv = document.getElementById('sbMediaPtv')?.checked;
+        const mImg = document.getElementById('mockupMediaImg');
+        const mIcon = document.getElementById('mockupMediaIcon');
+
+        if (mType === 'image' && mUrl && (mUrl.startsWith('http://') || mUrl.startsWith('https://') || mUrl.startsWith('data:image'))) {
+          if (mImg) {
+            mImg.src = mUrl;
+            mImg.classList.remove('hidden');
+          }
+          if (mIcon) mIcon.classList.add('hidden');
+        } else {
+          if (mImg) mImg.classList.add('hidden');
+          if (mIcon) mIcon.classList.remove('hidden');
+        }
+
         if (mediaText) mediaText.innerText = (isPtv ? '[Round PTV Video Note] ' : '[' + mType.toUpperCase() + '] ') + (mUrl || 'File Attachment');
         if (bodyEl) bodyEl.innerText = mCaption || (mUrl ? 'Attached ' + mType : 'Attachment preview');
       } else if (activeSandboxMode === 'sticker') {

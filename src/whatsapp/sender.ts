@@ -17,7 +17,7 @@ import {
   ReadMessagesParams,
 } from './types.js';
 import { config } from '../config/index.js';
-import { resolveMediaBuffer } from './media.js';
+import { resolveMediaBuffer, resolveMediaWithMeta, detectMimeType } from './media.js';
 
 function getSocket(instanceId: string): WASocket {
   const socket = WhatsAppEngineManager.getSocket(instanceId);
@@ -85,18 +85,23 @@ export async function sendText(params: SendTextParams): Promise<any> {
 
 export async function sendMedia(params: SendMediaParams): Promise<any> {
   const socket = getSocket(params.instanceId);
-  const buffer = await resolveMediaBuffer(params.mediaUrl, params.base64);
+  const resolved = await resolveMediaWithMeta({
+    mediaUrl: params.mediaUrl,
+    base64: params.base64,
+    mediaType: params.mediaType,
+    requestedMimeType: params.mimeType,
+  });
   await simulatePresence(socket, params.remoteJid, 'composing', (params.caption || '').length);
 
   const content: AnyMessageContent =
     params.mediaType === 'image'
-      ? { image: buffer, caption: params.caption, mimetype: params.mimeType }
+      ? { image: resolved.buffer, caption: params.caption, mimetype: resolved.mimeType }
       : params.mediaType === 'video'
-      ? { video: buffer, caption: params.caption, mimetype: params.mimeType, ptv: Boolean(params.isPtv) }
+      ? { video: resolved.buffer, caption: params.caption, mimetype: resolved.mimeType, ptv: Boolean(params.isPtv) }
       : {
-          document: buffer,
+          document: resolved.buffer,
           caption: params.caption,
-          mimetype: params.mimeType,
+          mimetype: resolved.mimeType,
           fileName: params.fileName || 'attachment',
         };
 
@@ -117,7 +122,12 @@ export async function sendMedia(params: SendMediaParams): Promise<any> {
 
 export async function sendAudio(params: SendAudioParams): Promise<any> {
   const socket = getSocket(params.instanceId);
-  const buffer = await resolveMediaBuffer(params.audioUrl, params.base64);
+  const resolved = await resolveMediaWithMeta({
+    mediaUrl: params.audioUrl,
+    base64: params.base64,
+    mediaType: 'audio',
+    requestedMimeType: params.mimeType,
+  });
   await simulatePresence(socket, params.remoteJid, 'recording', 40);
 
   try {
@@ -125,9 +135,9 @@ export async function sendAudio(params: SendAudioParams): Promise<any> {
       socket.sendMessage(
         params.remoteJid,
         {
-          audio: buffer,
+          audio: resolved.buffer,
           ptt: params.isVoiceNote !== false, // Default to voice note (PTT)
-          mimetype: params.mimeType || 'audio/ogg; codecs=opus',
+          mimetype: resolved.mimeType || 'audio/ogg; codecs=opus',
         },
         quoteOptions(params.remoteJid, params.quotedMessageId)
       ),
@@ -261,7 +271,24 @@ async function injectWebpExif(webpBuffer: Buffer, packName?: string, authorName?
 export async function sendSticker(params: SendStickerParams): Promise<any> {
   const socket = getSocket(params.instanceId);
   const buffer = await resolveMediaBuffer(params.stickerUrl, params.base64);
-  const finalBuffer = await injectWebpExif(buffer, params.packName, params.authorName);
+
+  // Auto-convert non-WebP inputs (PNG/JPEG) to WhatsApp 512x512 WebP sticker format
+  let webpBuffer = buffer;
+  const detectedMime = detectMimeType(buffer);
+  if (detectedMime !== 'image/webp') {
+    try {
+      const sharpModule = await import('sharp');
+      const sharp = sharpModule.default || sharpModule;
+      webpBuffer = await sharp(buffer)
+        .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+        .webp({ quality: 80 })
+        .toBuffer();
+    } catch (err: any) {
+      console.warn('[Sticker WebP Conversion] Sharp fallback to raw buffer:', err?.message || err);
+    }
+  }
+
+  const finalBuffer = await injectWebpExif(webpBuffer, params.packName, params.authorName);
   await simulatePresence(socket, params.remoteJid, 'composing', 10);
 
   try {

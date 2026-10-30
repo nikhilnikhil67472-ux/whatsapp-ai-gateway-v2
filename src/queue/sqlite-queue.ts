@@ -119,14 +119,13 @@ export async function processOutboundMessagesQueue(): Promise<number> {
           quotedMessageId: msg.quoted_message_id || undefined,
         });
       } else if (msg.reply_type === 'media') {
-        const defaultMime = msg.media_type === 'video' ? 'video/mp4' : msg.media_type === 'document' ? 'application/octet-stream' : 'image/jpeg';
         result = await sendMedia({
           instanceId: instance.id,
           remoteJid: msg.remote_jid,
           mediaUrl: msg.media_url || undefined,
           base64: msg.payload?.base64,
           mediaType: (msg.media_type as any) || 'image',
-          mimeType: msg.mime_type || defaultMime,
+          mimeType: msg.mime_type || undefined,
           caption: msg.text_content || undefined,
           fileName: msg.payload?.fileName,
           isPtv: Boolean(msg.payload?.isPtv),

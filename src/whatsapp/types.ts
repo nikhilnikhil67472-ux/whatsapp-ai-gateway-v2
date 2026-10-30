@@ -47,7 +47,7 @@ export interface SendMediaParams {
   mediaUrl?: string;
   base64?: string;
   mediaType: 'image' | 'video' | 'document';
-  mimeType: string;
+  mimeType?: string;
   caption?: string;
   fileName?: string;
   isPtv?: boolean;

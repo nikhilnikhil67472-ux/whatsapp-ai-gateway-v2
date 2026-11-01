@@ -71,7 +71,7 @@ export interface WhatsAppInstance {
   id: string;
   org_id: string | null;
   instance_name: string;
-  status: 'created' | 'connecting' | 'waiting_qr' | 'connected' | 'reconnecting' | 'disconnected' | 'logged_out' | 'stopped' | 'failed';
+  status: 'created' | 'connecting' | 'waiting_qr' | 'connected' | 'reconnecting' | 'disconnected' | 'logged_out' | 'stopped' | 'failed' | 'flagged';
   phone_number: string | null;
   push_name: string | null;
   qr_base64: string | null;
@@ -83,6 +83,8 @@ export interface WhatsAppInstance {
   pairing_phone: string | null;
   warmup_day: number;
   daily_sent_count: number;
+  daily_warm_sent_count: number;
+  daily_cold_sent_count: number;
   last_sent_date: string | null;
   events_config: InstanceEventsConfig;
   ai_enabled: boolean;
@@ -191,6 +193,42 @@ export interface AiRun {
   created_at: string;
 }
 
+export interface KnownContact {
+  instance_id: string;
+  jid: string;
+  last_inbound_at: string;
+  is_warm: boolean;
+}
+
+export interface WarmupCheckResult {
+  allowed: boolean;
+  limit: number;
+  current: number;
+  warmupDay: number;
+  tier?: 'warm' | 'cold' | 'overall';
+  errorCode?: 'COLD_WARMUP_LIMIT_REACHED' | 'WARMUP_LIMIT_REACHED';
+}
+
+export function canonicalizeWhatsAppJid(jid: string): string {
+  if (!jid) return '';
+  let clean = jid.trim().toLowerCase();
+  clean = clean.replace(/:.*?@/, '@');
+  clean = clean.replace(/[\s\-]/g, '');
+
+  if (!clean.includes('@')) {
+    const digits = clean.replace(/[^0-9]/g, '');
+    return digits ? `${digits}@s.whatsapp.net` : clean;
+  }
+
+  if (clean.endsWith('@s.whatsapp.net')) {
+    const [user, domain] = clean.split('@');
+    const digits = user.replace(/[^0-9]/g, '');
+    return digits ? `${digits}@${domain}` : clean;
+  }
+
+  return clean;
+}
+
 export interface Contact {
   id: string;
   instance_id: string;
@@ -222,7 +260,7 @@ export class GatewayDatabase {
       if (!fs.existsSync(dbDir)) {
         fs.mkdirSync(dbDir, { recursive: true });
       }
-      this.db = new Database(dbFilePath);
+      this.db = new Database(dbFilePath, { timeout: 10000 });
 
       // Attempt WAL mode; fall back gracefully to DELETE mode if filesystem does not support POSIX shared memory (e.g., NFS, SMB, or network mounts)
       try {
@@ -287,12 +325,29 @@ export class GatewayDatabase {
       if (!instColNames.has('daily_sent_count')) {
         this.db.exec('ALTER TABLE whatsapp_instances ADD COLUMN daily_sent_count INTEGER NOT NULL DEFAULT 0;');
       }
+      if (!instColNames.has('daily_warm_sent_count')) {
+        this.db.exec('ALTER TABLE whatsapp_instances ADD COLUMN daily_warm_sent_count INTEGER NOT NULL DEFAULT 0;');
+      }
+      if (!instColNames.has('daily_cold_sent_count')) {
+        this.db.exec('ALTER TABLE whatsapp_instances ADD COLUMN daily_cold_sent_count INTEGER NOT NULL DEFAULT 0;');
+      }
       if (!instColNames.has('last_sent_date')) {
         this.db.exec('ALTER TABLE whatsapp_instances ADD COLUMN last_sent_date TEXT;');
       }
       if (!instColNames.has('events_config')) {
         this.db.exec('ALTER TABLE whatsapp_instances ADD COLUMN events_config TEXT;');
       }
+
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS known_contacts (
+          instance_id TEXT NOT NULL REFERENCES whatsapp_instances(id) ON DELETE CASCADE,
+          jid TEXT NOT NULL,
+          last_inbound_at TEXT NOT NULL,
+          is_warm INTEGER NOT NULL DEFAULT 1,
+          PRIMARY KEY (instance_id, jid)
+        );
+        CREATE INDEX IF NOT EXISTS idx_known_contacts_instance ON known_contacts(instance_id);
+      `);
 
       // Check api_keys columns
       const keyCols = this.db.prepare('PRAGMA table_info(api_keys)').all() as { name: string }[];
@@ -535,7 +590,7 @@ export class GatewayDatabase {
 
   public updateInstance(id: string, updates: Partial<Record<string, any>>): boolean {
     const allowed = [
-      'org_id', 'proxy_url', 'pairing_phone', 'warmup_day', 'daily_sent_count', 'last_sent_date',
+      'org_id', 'proxy_url', 'pairing_phone', 'warmup_day', 'daily_sent_count', 'daily_warm_sent_count', 'daily_cold_sent_count', 'last_sent_date',
       'events_config',
       'status', 'phone_number', 'push_name', 'qr_base64', 'qr_updated_at',
       'last_connection_at', 'last_disconnection_at', 'logged_out_at',
@@ -575,17 +630,158 @@ export class GatewayDatabase {
     return res.changes > 0;
   }
 
+  public static readonly WARM_LIMITS_BY_DAY = [50, 100, 200, 350, 500];
+  public static readonly COLD_LIMITS_BY_DAY = [8, 15, 25, 40, 60];
+
   /**
-   * SIM Warm-Up Schedule Engine
-   * Prevents WhatsApp bans on newly connected numbers by gradually ramping outbound volume:
-   * Day 1: 30 msgs, Day 2: 60 msgs, Day 3: 120 msgs, Day 4: 250 msgs, Day 5+: 500 msgs.
+   * Two-Tier SIM Anti-Ban Warm-Up Schedule Engine
+   * Prevents WhatsApp bans (WA-Sentinel) by separating limits into two counters:
+   * - Warm Replies (inbound contact exists): Day 1: 50, Day 2: 100, Day 3: 200, Day 4: 350, Day 5+: 500 msgs/day
+   * - Cold Outbound (first-time message): Day 1: 8, Day 2: 15, Day 3: 25, Day 4: 40, Day 5+: 60 msgs/day
    */
-  public checkAndIncrementWarmupLimit(instanceId: string): {
-    allowed: boolean;
-    limit: number;
-    current: number;
-    warmupDay: number;
-  } {
+  public checkAndIncrementWarmupLimit(
+    instanceId: string,
+    destinationJidOrTier?: string
+  ): WarmupCheckResult {
+    return this.db.transaction((): WarmupCheckResult => {
+      const instance = this.getInstance(instanceId);
+      if (!instance) {
+        return { allowed: false, limit: 0, current: 0, warmupDay: 1 };
+      }
+
+      if (instance.sandbox_mode) {
+        return { allowed: true, limit: 9999, current: 0, warmupDay: 1 };
+      }
+
+      const today = new Date().toISOString().slice(0, 10);
+      let warmupDay = Math.max(1, Math.min(30, Number(instance.warmup_day || 1)));
+      let dailyCount = Number(instance.daily_sent_count || 0);
+      let dailyWarmCount = Number(instance.daily_warm_sent_count || 0);
+      let dailyColdCount = Number(instance.daily_cold_sent_count || 0);
+
+      if (instance.last_sent_date !== today) {
+        if (instance.last_sent_date) {
+          warmupDay = Math.min(30, warmupDay + 1);
+        }
+        dailyCount = 0;
+        dailyWarmCount = 0;
+        dailyColdCount = 0;
+        this.updateInstance(instanceId, {
+          last_sent_date: today,
+          daily_sent_count: 0,
+          daily_warm_sent_count: 0,
+          daily_cold_sent_count: 0,
+          warmup_day: warmupDay,
+        });
+      }
+
+      // Determine tier
+      let tier: 'warm' | 'cold' | 'overall' = 'overall';
+      if (destinationJidOrTier) {
+        const lower = destinationJidOrTier.trim().toLowerCase();
+        if (lower === 'warm') {
+          tier = 'warm';
+        } else if (lower === 'cold') {
+          tier = 'cold';
+        } else {
+          tier = this.isContactWarm(instanceId, destinationJidOrTier) ? 'warm' : 'cold';
+        }
+      }
+
+      if (tier === 'cold') {
+        const coldLimits = GatewayDatabase.COLD_LIMITS_BY_DAY;
+        const coldLimit = warmupDay <= coldLimits.length ? coldLimits[warmupDay - 1] : 60;
+
+        if (dailyColdCount >= coldLimit) {
+          return {
+            allowed: false,
+            limit: coldLimit,
+            current: dailyColdCount,
+            warmupDay,
+            tier: 'cold',
+            errorCode: 'COLD_WARMUP_LIMIT_REACHED',
+          };
+        }
+
+        this.updateInstance(instanceId, {
+          daily_cold_sent_count: dailyColdCount + 1,
+          daily_sent_count: dailyCount + 1,
+          last_sent_date: today,
+        });
+
+        return {
+          allowed: true,
+          limit: coldLimit,
+          current: dailyColdCount + 1,
+          warmupDay,
+          tier: 'cold',
+        };
+      }
+
+      if (tier === 'warm') {
+        const warmLimits = GatewayDatabase.WARM_LIMITS_BY_DAY;
+        const warmLimit = warmupDay <= warmLimits.length ? warmLimits[warmupDay - 1] : 500;
+
+        if (dailyWarmCount >= warmLimit) {
+          return {
+            allowed: false,
+            limit: warmLimit,
+            current: dailyWarmCount,
+            warmupDay,
+            tier: 'warm',
+            errorCode: 'WARMUP_LIMIT_REACHED',
+          };
+        }
+
+        this.updateInstance(instanceId, {
+          daily_warm_sent_count: dailyWarmCount + 1,
+          daily_sent_count: dailyCount + 1,
+          last_sent_date: today,
+        });
+
+        return {
+          allowed: true,
+          limit: warmLimit,
+          current: dailyWarmCount + 1,
+          warmupDay,
+          tier: 'warm',
+        };
+      }
+
+      // Overall / legacy fallback (when destination JID or tier is not specified)
+      const limitsByDay = [30, 60, 120, 250, 500];
+      const dailyLimit = warmupDay <= limitsByDay.length ? limitsByDay[warmupDay - 1] : 500;
+
+      if (dailyCount >= dailyLimit) {
+        return {
+          allowed: false,
+          limit: dailyLimit,
+          current: dailyCount,
+          warmupDay,
+          tier: 'overall',
+          errorCode: 'WARMUP_LIMIT_REACHED',
+        };
+      }
+
+      this.updateInstance(instanceId, {
+        daily_sent_count: dailyCount + 1,
+        last_sent_date: today,
+      });
+
+      return {
+        allowed: true,
+        limit: dailyLimit,
+        current: dailyCount + 1,
+        warmupDay,
+        tier: 'overall',
+      };
+    }).immediate();
+  }
+
+  public checkWarmupLimit(
+    instanceId: string,
+    destinationJidOrTier?: string
+  ): WarmupCheckResult {
     const instance = this.getInstance(instanceId);
     if (!instance) {
       return { allowed: false, limit: 0, current: 0, warmupDay: 1 };
@@ -596,34 +792,102 @@ export class GatewayDatabase {
     }
 
     const today = new Date().toISOString().slice(0, 10);
-    let warmupDay = Number(instance.warmup_day || 1);
-    let dailyCount = Number(instance.daily_sent_count || 0);
+    const rawWarmupDay = Math.max(1, Math.min(30, Number(instance.warmup_day || 1)));
+    const isNewDay = instance.last_sent_date !== today;
+    const warmupDay = isNewDay && instance.last_sent_date ? Math.min(30, rawWarmupDay + 1) : rawWarmupDay;
+    const dailyCount = isNewDay ? 0 : Number(instance.daily_sent_count || 0);
+    const dailyWarmCount = isNewDay ? 0 : Number(instance.daily_warm_sent_count || 0);
+    const dailyColdCount = isNewDay ? 0 : Number(instance.daily_cold_sent_count || 0);
 
-    if (instance.last_sent_date !== today) {
-      if (instance.last_sent_date) {
-        warmupDay = Math.min(30, warmupDay + 1);
+    let tier: 'warm' | 'cold' | 'overall' = 'overall';
+    if (destinationJidOrTier) {
+      const lower = destinationJidOrTier.trim().toLowerCase();
+      if (lower === 'warm') {
+        tier = 'warm';
+      } else if (lower === 'cold') {
+        tier = 'cold';
+      } else {
+        tier = this.isContactWarm(instanceId, destinationJidOrTier) ? 'warm' : 'cold';
       }
-      dailyCount = 0;
-      this.updateInstance(instanceId, {
-        last_sent_date: today,
-        daily_sent_count: 0,
-        warmup_day: warmupDay,
-      });
+    }
+
+    if (tier === 'cold') {
+      const coldLimits = GatewayDatabase.COLD_LIMITS_BY_DAY;
+      const coldLimit = warmupDay <= coldLimits.length ? coldLimits[warmupDay - 1] : 60;
+      return {
+        allowed: dailyColdCount < coldLimit,
+        limit: coldLimit,
+        current: dailyColdCount,
+        warmupDay,
+        tier: 'cold',
+        errorCode: dailyColdCount >= coldLimit ? 'COLD_WARMUP_LIMIT_REACHED' : undefined,
+      };
+    }
+
+    if (tier === 'warm') {
+      const warmLimits = GatewayDatabase.WARM_LIMITS_BY_DAY;
+      const warmLimit = warmupDay <= warmLimits.length ? warmLimits[warmupDay - 1] : 500;
+      return {
+        allowed: dailyWarmCount < warmLimit,
+        limit: warmLimit,
+        current: dailyWarmCount,
+        warmupDay,
+        tier: 'warm',
+        errorCode: dailyWarmCount >= warmLimit ? 'WARMUP_LIMIT_REACHED' : undefined,
+      };
     }
 
     const limitsByDay = [30, 60, 120, 250, 500];
     const dailyLimit = warmupDay <= limitsByDay.length ? limitsByDay[warmupDay - 1] : 500;
+    return {
+      allowed: dailyCount < dailyLimit,
+      limit: dailyLimit,
+      current: dailyCount,
+      warmupDay,
+      tier: 'overall',
+      errorCode: dailyCount >= dailyLimit ? 'WARMUP_LIMIT_REACHED' : undefined,
+    };
+  }
 
-    if (dailyCount >= dailyLimit) {
-      return { allowed: false, limit: dailyLimit, current: dailyCount, warmupDay };
-    }
+  public decrementWarmupLimit(
+    instanceId: string,
+    destinationJidOrTier?: string
+  ): void {
+    this.db.transaction(() => {
+      const instance = this.getInstance(instanceId);
+      if (!instance || instance.sandbox_mode) return;
 
-    this.updateInstance(instanceId, {
-      daily_sent_count: dailyCount + 1,
-      last_sent_date: today,
-    });
+      let tier: 'warm' | 'cold' | 'overall' = 'overall';
+      if (destinationJidOrTier) {
+        const lower = destinationJidOrTier.trim().toLowerCase();
+        if (lower === 'warm') {
+          tier = 'warm';
+        } else if (lower === 'cold') {
+          tier = 'cold';
+        } else {
+          tier = this.isContactWarm(instanceId, destinationJidOrTier) ? 'warm' : 'cold';
+        }
+      }
 
-    return { allowed: true, limit: dailyLimit, current: dailyCount + 1, warmupDay };
+      const dailyCount = Math.max(0, Number(instance.daily_sent_count || 0) - 1);
+      if (tier === 'cold') {
+        const dailyCold = Math.max(0, Number(instance.daily_cold_sent_count || 0) - 1);
+        this.updateInstance(instanceId, {
+          daily_cold_sent_count: dailyCold,
+          daily_sent_count: dailyCount,
+        });
+      } else if (tier === 'warm') {
+        const dailyWarm = Math.max(0, Number(instance.daily_warm_sent_count || 0) - 1);
+        this.updateInstance(instanceId, {
+          daily_warm_sent_count: dailyWarm,
+          daily_sent_count: dailyCount,
+        });
+      } else {
+        this.updateInstance(instanceId, {
+          daily_sent_count: dailyCount,
+        });
+      }
+    })();
   }
 
   private inflateInstance(row: any): WhatsAppInstance | null {
@@ -645,6 +909,8 @@ export class GatewayDatabase {
       pairing_phone: row.pairing_phone || null,
       warmup_day: Number(row.warmup_day || 1),
       daily_sent_count: Number(row.daily_sent_count || 0),
+      daily_warm_sent_count: Number(row.daily_warm_sent_count || 0),
+      daily_cold_sent_count: Number(row.daily_cold_sent_count || 0),
       last_sent_date: row.last_sent_date || null,
       events_config: eventsConfig,
       ai_enabled: Boolean(row.ai_enabled),
@@ -749,6 +1015,11 @@ export class GatewayDatabase {
       raw_payload: JSON.stringify(params.raw_payload || {}),
       created_at: now,
     });
+
+    // Auto-record known contact if inbound
+    if (!params.from_me || params.direction === 'inbound') {
+      this.recordInboundContact(params.instance_id, params.remote_jid);
+    }
 
     return id;
   }
@@ -856,13 +1127,17 @@ export class GatewayDatabase {
     return { ...row, payload: row.payload ? JSON.parse(row.payload) : null };
   }
 
-  public listPendingOutboundMessages(limit = 20): OutboundMessage[] {
+  public listPendingOutboundMessages(limit = 20, instanceId?: string): OutboundMessage[] {
     const now = this.now();
+    const whereSql = instanceId
+      ? `(instance_id = ?) AND (status = 'pending' OR (status = 'retry' AND next_attempt_at IS NOT NULL AND next_attempt_at <= ?))`
+      : `status = 'pending' OR (status = 'retry' AND next_attempt_at IS NOT NULL AND next_attempt_at <= ?)`;
+    const params = instanceId ? [instanceId, now, limit] : [now, limit];
     const rows = this.db.prepare(`
       SELECT * FROM outbound_messages 
-      WHERE status = 'pending' OR (status = 'retry' AND next_attempt_at IS NOT NULL AND next_attempt_at <= ?)
+      WHERE ${whereSql}
       ORDER BY created_at ASC LIMIT ?
-    `).all(now, limit) as any[];
+    `).all(...params) as any[];
     return rows.map((r) => ({
       ...r,
       payload: r.payload ? JSON.parse(r.payload) : null,
@@ -1267,6 +1542,73 @@ export class GatewayDatabase {
       WHERE instance_id = ? AND remote_jid = ? AND status = 'sent' AND sent_at >= ?
     `).get(instanceId, remoteJid, sinceIso) as any;
     return row?.count || 0;
+  }
+
+  // --- Known Contacts (Warm-up & Inbound Activity Memory) ---
+
+  public recordInboundContact(instanceId: string, jid: string): void {
+    if (!instanceId || !jid) return;
+    const canonical = canonicalizeWhatsAppJid(jid);
+    if (
+      !canonical ||
+      canonical === 'status@broadcast' ||
+      canonical.endsWith('@broadcast') ||
+      canonical.endsWith('@newsletter') ||
+      canonical.startsWith('0@')
+    ) {
+      return;
+    }
+    const now = this.now();
+    this.db.prepare(`
+      INSERT INTO known_contacts (instance_id, jid, last_inbound_at, is_warm)
+      VALUES (?, ?, ?, 1)
+      ON CONFLICT(instance_id, jid) DO UPDATE SET
+        last_inbound_at = excluded.last_inbound_at,
+        is_warm = 1
+    `).run(instanceId, canonical, now);
+  }
+
+  public isContactWarm(instanceId: string, jid: string): boolean {
+    if (!instanceId || !jid) return false;
+    const canonical = canonicalizeWhatsAppJid(jid);
+    const raw = jid.trim().toLowerCase();
+    const stripped = jid.replace(/:.*?@/, '@').trim().toLowerCase();
+    const row = this.db.prepare(`
+      SELECT is_warm FROM known_contacts 
+      WHERE instance_id = ? AND (jid = ? OR jid = ? OR jid = ?)
+    `).get(instanceId, canonical, raw, stripped) as { is_warm: number } | undefined;
+    return Boolean(row && row.is_warm === 1);
+  }
+
+  public getKnownContact(instanceId: string, jid: string): KnownContact | null {
+    if (!instanceId || !jid) return null;
+    const canonical = canonicalizeWhatsAppJid(jid);
+    const raw = jid.trim().toLowerCase();
+    const stripped = jid.replace(/:.*?@/, '@').trim().toLowerCase();
+    const row = this.db.prepare(`
+      SELECT instance_id, jid, last_inbound_at, is_warm FROM known_contacts 
+      WHERE instance_id = ? AND (jid = ? OR jid = ? OR jid = ?)
+    `).get(instanceId, canonical, raw, stripped) as any;
+    if (!row) return null;
+    return {
+      instance_id: row.instance_id,
+      jid: row.jid,
+      last_inbound_at: row.last_inbound_at,
+      is_warm: Boolean(row.is_warm),
+    };
+  }
+
+  public listKnownContacts(instanceId: string): KnownContact[] {
+    const rows = this.db.prepare(`
+      SELECT instance_id, jid, last_inbound_at, is_warm FROM known_contacts 
+      WHERE instance_id = ? ORDER BY last_inbound_at DESC
+    `).all(instanceId) as any[];
+    return rows.map((r) => ({
+      instance_id: r.instance_id,
+      jid: r.jid,
+      last_inbound_at: r.last_inbound_at,
+      is_warm: Boolean(r.is_warm),
+    }));
   }
 
   // --- Auto Reply Rules ---

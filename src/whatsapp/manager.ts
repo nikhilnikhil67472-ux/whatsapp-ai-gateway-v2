@@ -5,7 +5,9 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import QRCode from 'qrcode';
-import { db } from '../db/database.js';
+import https from 'node:https';
+import http from 'node:http';
+import { db, WhatsAppInstance } from '../db/database.js';
 import { bindWhatsAppEvents } from './events.js';
 import {
   clearSqliteAuthState,
@@ -15,15 +17,152 @@ import {
 import { config } from '../config/index.js';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { SocksProxyAgent } from 'socks-proxy-agent';
+import { ProxyCheckResult, CircuitBreakerState } from './types.js';
 
 export function resolveProxyAgent(proxyUrl?: string | null): any {
   if (!proxyUrl) return undefined;
   const trimmed = proxyUrl.trim();
   if (!trimmed) return undefined;
-  if (trimmed.startsWith('socks://') || trimmed.startsWith('socks5://')) {
+  if (trimmed.startsWith('socks')) {
     return new SocksProxyAgent(trimmed);
   }
   return new HttpsProxyAgent(trimmed);
+}
+
+type ProxyVerifierFn = (proxyUrl?: string | null) => Promise<ProxyCheckResult>;
+let customProxyVerifier: ProxyVerifierFn | null = null;
+
+export function setProxyVerifier(verifier: ProxyVerifierFn | null): void {
+  customProxyVerifier = verifier;
+}
+
+type IpFetcherFn = (agent?: any, timeoutMs?: number) => Promise<string>;
+let customIpFetcher: IpFetcherFn | null = null;
+
+export function setIpFetcher(fetcher: IpFetcherFn | null): void {
+  customIpFetcher = fetcher;
+}
+
+export async function fetchPublicIp(agent?: any, timeoutMs = 5000): Promise<string> {
+  if (customIpFetcher) {
+    return await customIpFetcher(agent, timeoutMs);
+  }
+
+  const url = config.proxyCheckUrl || 'https://api.ipify.org?format=json';
+  const isHttps = url.startsWith('https://');
+  const client = isHttps ? https : http;
+
+  return new Promise((resolve, reject) => {
+    const req = client.get(
+      url,
+      {
+        agent,
+        timeout: timeoutMs,
+        headers: {
+          'User-Agent': 'WhatsAppAiGateway/2.0 (+curl/7.88.1)',
+          Accept: 'application/json, text/plain',
+        },
+      },
+      (res) => {
+        if (res.statusCode && res.statusCode >= 400) {
+          return reject(new Error(`Proxy check HTTP status ${res.statusCode}`));
+        }
+        let data = '';
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(data);
+            const ip = parsed.ip || parsed.query || parsed.origin || parsed.ip_address;
+            if (ip) {
+              return resolve(String(ip).trim());
+            }
+          } catch {
+            const trimmed = data.trim();
+            if (/^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$|^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$/.test(trimmed)) {
+              return resolve(trimmed);
+            }
+          }
+          if (data.trim()) return resolve(data.trim());
+          reject(new Error('Proxy check response did not return a valid IP address'));
+        });
+      }
+    );
+
+    req.on('timeout', () => {
+      req.destroy(new Error(`Proxy check timed out after ${timeoutMs}ms`));
+    });
+
+    req.on('error', (err) => {
+      reject(err);
+    });
+  });
+}
+
+export async function verifyProxyConnection(proxyUrl?: string | null): Promise<ProxyCheckResult> {
+  const checkedAt = new Date().toISOString();
+
+  // Fail-closed if proxy is required globally but none is configured
+  if (!proxyUrl || !proxyUrl.trim()) {
+    if (config.requireProxy) {
+      throw new Error('Egress proxy is required by configuration (REQUIRE_PROXY=true), but no proxy is configured.');
+    }
+    return { ok: true, proxyUrl: null, checkedAt };
+  }
+
+  const trimmed = proxyUrl.trim();
+
+  // Custom injected verifier for unit testing
+  if (customProxyVerifier) {
+    return await customProxyVerifier(trimmed);
+  }
+
+  let agent: any;
+  try {
+    agent = resolveProxyAgent(trimmed);
+  } catch (err: any) {
+    throw new Error(`Invalid proxy configuration: ${err?.message || trimmed}`);
+  }
+
+  if (!agent) {
+    throw new Error(`Failed to initialize proxy agent for: ${trimmed}`);
+  }
+
+  // 1. Fetch direct host public IP (best-effort, ignoring errors if direct egress is firewalled)
+  let hostIp: string | null = null;
+  try {
+    hostIp = await fetchPublicIp(undefined, 3000);
+  } catch {
+    hostIp = null;
+  }
+
+  // 2. Fetch egress IP through proxy agent (strict requirement)
+  let egressIp: string;
+  try {
+    egressIp = await fetchPublicIp(agent, 6000);
+  } catch (err: any) {
+    throw new Error(`Proxy connection unreachable or timed out: ${err?.message || 'unknown error'}`);
+  }
+
+  // 3. Fail-Closed Leak Detection: If egress IP matches host datacenter IP
+  if (hostIp && egressIp) {
+    const normHost = hostIp.trim().toLowerCase();
+    const normEgress = egressIp.trim().toLowerCase();
+    if (normHost === normEgress) {
+      throw new Error(
+        `Egress IP leak detected: proxy egress IP (${egressIp}) matches host datacenter IP (${hostIp}). Fail-closed proxy guard aborted connection.`
+      );
+    }
+  }
+
+  return {
+    ok: true,
+    proxyUrl: trimmed,
+    hostIp: hostIp || undefined,
+    egressIp,
+    checkedAt,
+  };
 }
 
 interface EngineState {
@@ -33,6 +172,7 @@ interface EngineState {
   reconnectAttempts: Map<string, number>;
   reconnectTimers: Map<string, NodeJS.Timeout>;
   deleting: Set<string>;
+  circuitBreakers: Map<string, CircuitBreakerState>;
 }
 
 const engineState: EngineState = {
@@ -42,11 +182,37 @@ const engineState: EngineState = {
   reconnectAttempts: new Map(),
   reconnectTimers: new Map(),
   deleting: new Set(),
+  circuitBreakers: new Map(),
 };
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 
-function getDisconnectStatusCode(error: unknown): number | null {
+export function calculateReconnectDelay(attempt: number): number {
+  // Enforce exponential backoff with randomized jitter: 5s -> 15s -> 45s + jitter
+  const baseSeconds = 5 * Math.pow(3, Math.max(0, attempt - 1));
+  const cappedBase = Math.min(baseSeconds, 60);
+  const jitterMs = Math.floor(Math.random() * 2000);
+  return (cappedBase * 1000) + jitterMs;
+}
+
+export function getSocketConfig(state: any, logger: any, agent?: any): any {
+  return {
+    auth: state,
+    printQRInTerminal: false,
+    logger,
+    agent,
+    fetchAgent: agent,
+    browser: Browsers.macOS('Desktop'),
+    markOnlineOnConnect: false,
+    syncFullHistory: false,
+    generateHighQualityLinkPreview: true,
+    connectTimeoutMs: 60000,
+    defaultQueryTimeoutMs: 60000,
+    keepAliveIntervalMs: 25000,
+  };
+}
+
+export function getDisconnectStatusCode(error: unknown): number | null {
   if (!error || typeof error !== 'object') return null;
   const err = error as any;
   return err.output?.statusCode || err.statusCode || err.data?.statusCode || null;
@@ -60,20 +226,28 @@ function clearReconnectTimer(instanceId: string): void {
   }
 }
 
-function shouldReconnect(statusCode: number | null): boolean {
+export function shouldReconnect(statusCode: number | null): boolean {
   if (!statusCode) return true;
   return ![
     DisconnectReason.loggedOut,
     DisconnectReason.badSession,
     DisconnectReason.forbidden,
     DisconnectReason.multideviceMismatch,
-  ].includes(statusCode as DisconnectReason);
+    401,
+    403,
+    411,
+    500,
+  ].includes(statusCode as any);
 }
 
 function scheduleReconnect(instanceId: string): void {
   const instance = db.getInstance(instanceId);
   if (!instance || engineState.deleting.has(instanceId)) return;
   if (engineState.reconnectTimers.has(instanceId)) return;
+  if (WhatsAppEngineManager.isCircuitBreakerTripped(instanceId)) {
+    console.warn(`[WhatsApp Engine] Suppressing reconnect for ${instance.instance_name}: Circuit breaker active.`);
+    return;
+  }
 
   const attempt = (engineState.reconnectAttempts.get(instanceId) || 0) + 1;
   if (attempt > MAX_RECONNECT_ATTEMPTS) {
@@ -86,7 +260,7 @@ function scheduleReconnect(instanceId: string): void {
   }
 
   engineState.reconnectAttempts.set(instanceId, attempt);
-  const delay = Math.min(30000, Math.pow(2, attempt - 1) * 2000) + Math.floor(Math.random() * 1000);
+  const delay = calculateReconnectDelay(attempt);
 
   db.updateInstance(instanceId, { status: 'reconnecting' });
   console.log(`[WhatsApp Engine] Scheduling reconnect for ${instance.instance_name} in ${delay}ms (attempt ${attempt}/${MAX_RECONNECT_ATTEMPTS})`);
@@ -103,6 +277,57 @@ function scheduleReconnect(instanceId: string): void {
 }
 
 export class WhatsAppEngineManager {
+  public static verifyProxy = verifyProxyConnection;
+
+  public static isCircuitBreakerTripped(instanceId: string): boolean {
+    if (engineState.circuitBreakers.has(instanceId)) return true;
+    const instance = db.getInstance(instanceId);
+    return instance?.status === 'flagged';
+  }
+
+  public static getCircuitBreaker(instanceId: string): CircuitBreakerState | undefined {
+    const memory = engineState.circuitBreakers.get(instanceId);
+    if (memory) return memory;
+    const instance = db.getInstance(instanceId);
+    if (instance?.status === 'flagged') {
+      return {
+        tripped: true,
+        reason: DisconnectReason.forbidden,
+        code: 'forbidden',
+        trippedAt: instance.last_disconnection_at || instance.logged_out_at || new Date().toISOString(),
+      };
+    }
+    return undefined;
+  }
+
+  public static tripCircuitBreaker(instanceId: string, reason: number): void {
+    engineState.circuitBreakers.set(instanceId, {
+      tripped: true,
+      reason,
+      code: (DisconnectReason as any)[reason] || String(reason),
+      trippedAt: new Date().toISOString(),
+    });
+    if (
+      reason === DisconnectReason.forbidden ||
+      reason === DisconnectReason.multideviceMismatch ||
+      reason === 403 ||
+      reason === 411
+    ) {
+      db.updateInstance(instanceId, {
+        status: 'flagged',
+        last_disconnection_at: db.now(),
+      });
+    }
+  }
+
+  public static resetCircuitBreaker(instanceId: string): void {
+    engineState.circuitBreakers.delete(instanceId);
+    const instance = db.getInstance(instanceId);
+    if (instance?.status === 'flagged') {
+      db.updateInstance(instanceId, { status: 'disconnected' });
+    }
+  }
+
   public static getSocket(instanceId: string): WASocket | undefined {
     return engineState.sockets.get(instanceId);
   }
@@ -128,6 +353,8 @@ export class WhatsAppEngineManager {
       reconnectScheduled: engineState.reconnectTimers.has(instanceId),
       reconnectAttempts: engineState.reconnectAttempts.get(instanceId) || 0,
       deleting: engineState.deleting.has(instanceId),
+      circuitBreakerTripped: this.isCircuitBreakerTripped(instanceId),
+      circuitBreaker: this.getCircuitBreaker(instanceId) || null,
     };
   }
 
@@ -145,8 +372,44 @@ export class WhatsAppEngineManager {
       throw new Error(`Instance '${instanceId}' not found`);
     }
 
+    // Guard against re-starting a tripped circuit breaker instance unless explicitly resetting
+    if (this.isCircuitBreakerTripped(instanceId) && !purgeStaleSession) {
+      const breaker = this.getCircuitBreaker(instanceId);
+      const msg = `Circuit breaker active for instance ${instance.instance_name} (${instanceId}) due to terminal disconnect reason: ${breaker?.reason || breaker?.code || 'terminal'}. Auto-reconnect aborted.`;
+      console.warn(`[WhatsApp Engine] ${msg}`);
+      throw new Error(msg);
+    }
+
+    if (purgeStaleSession) {
+      this.resetCircuitBreaker(instanceId);
+    }
+
     clearReconnectTimer(instanceId);
     engineState.starting.add(instanceId);
+
+    // Fail-Closed Proxy Verification
+    if (instance.proxy_url || config.requireProxy) {
+      try {
+        await WhatsAppEngineManager.verifyProxy(instance.proxy_url);
+        db.addEventLog(instanceId, 'proxy.verified', {
+          proxy_url: instance.proxy_url ? instance.proxy_url.replace(/:[^:@]+@/, ':***@') : null,
+        });
+      } catch (proxyErr: any) {
+        const errorMsg = `Fail-Closed Proxy Guard: ${proxyErr.message}`;
+        console.error(`[WhatsApp Engine] ${errorMsg} for instance ${instance.instance_name} (${instanceId})`);
+        db.updateInstance(instanceId, {
+          status: 'failed',
+          qr_base64: null,
+          last_disconnection_at: db.now(),
+        });
+        db.addEventLog(instanceId, 'proxy.verification_failed', {
+          error: proxyErr.message,
+          proxy_url: instance.proxy_url ? instance.proxy_url.replace(/:[^:@]+@/, ':***@') : null,
+          action: 'startInstance',
+        });
+        throw new Error(errorMsg);
+      }
+    }
 
     if (purgeStaleSession) {
       clearSqliteAuthState(instanceId);
@@ -162,20 +425,7 @@ export class WhatsAppEngineManager {
       const logger = pino({ level: config.baileysLogLevel });
 
       const agent = instance.proxy_url ? resolveProxyAgent(instance.proxy_url) : undefined;
-
-      const sock = makeWASocket({
-        auth: state,
-        printQRInTerminal: false,
-        logger,
-        agent,
-        fetchAgent: agent,
-        browser: Browsers.ubuntu('Chrome'),
-        markOnlineOnConnect: false,
-        syncFullHistory: false,
-        connectTimeoutMs: 60000,
-        defaultQueryTimeoutMs: 60000,
-        keepAliveIntervalMs: 25000,
-      });
+      const sock = makeWASocket(getSocketConfig(state, logger, agent));
 
       engineState.sockets.set(instanceId, sock);
       sock.ev.on('creds.update', saveCreds);
@@ -258,6 +508,43 @@ export class WhatsAppEngineManager {
           if (engineState.deleting.has(instanceId)) return;
           if (!isCurrentSocket && intentional) return;
 
+          // DisconnectReason Circuit Breaker:
+          // Immediately trip circuit breaker on loggedOut, forbidden (403), or multideviceMismatch (411)
+          const codeNum = statusCode !== null ? (statusCode as number) : null;
+          const isCircuitBreaker = codeNum !== null && (
+            codeNum === DisconnectReason.loggedOut ||
+            codeNum === DisconnectReason.forbidden ||
+            codeNum === DisconnectReason.multideviceMismatch ||
+            codeNum === DisconnectReason.badSession
+          );
+
+          if (isCircuitBreaker && !intentional) {
+            WhatsAppEngineManager.tripCircuitBreaker(instanceId, statusCode!);
+            clearReconnectTimer(instanceId);
+            engineState.reconnectAttempts.delete(instanceId);
+            clearSqliteAuthState(instanceId);
+
+            const isFlagged = codeNum === DisconnectReason.forbidden || codeNum === DisconnectReason.multideviceMismatch;
+            const newStatus: WhatsAppInstance['status'] = isFlagged ? 'flagged' : 'disconnected';
+
+            db.updateInstance(instanceId, {
+              status: newStatus,
+              qr_base64: null,
+              last_disconnection_at: db.now(),
+              logged_out_at: db.now(),
+            });
+
+            db.addEventLog(instanceId, 'circuit_breaker.tripped', {
+              code: statusCode,
+              reason: (DisconnectReason as any)[statusCode!] || String(statusCode),
+              status: newStatus,
+              at: db.now(),
+            });
+
+            console.warn(`[WhatsApp Engine] Circuit breaker TRIPPED for ${instance.instance_name} (${instanceId}) on DisconnectReason: ${statusCode}. Marked '${newStatus}'. Auto-reconnect permanently aborted.`);
+            return;
+          }
+
           const reconnect = !intentional && shouldReconnect(statusCode);
 
           console.log(`[WhatsApp Engine] Connection closed for ${instance.instance_name}. Code: ${statusCode}, Intentional: ${intentional}, Reconnect: ${reconnect}`);
@@ -298,7 +585,7 @@ export class WhatsAppEngineManager {
             return;
           }
 
-          // Trigger anti-loop exponential reconnect
+          // Trigger anti-loop exponential reconnect with jitter (5s -> 15s -> 45s + jitter)
           scheduleReconnect(instanceId);
         }
       });
@@ -331,6 +618,7 @@ export class WhatsAppEngineManager {
   public static async logoutInstance(instanceId: string): Promise<void> {
     clearReconnectTimer(instanceId);
     engineState.reconnectAttempts.delete(instanceId);
+    this.resetCircuitBreaker(instanceId);
     const sock = engineState.sockets.get(instanceId);
     engineState.sockets.delete(instanceId);
 
@@ -356,6 +644,9 @@ export class WhatsAppEngineManager {
 
   public static async restartInstance(instanceId: string, purgeStaleSession = false): Promise<void> {
     await this.stopInstance(instanceId);
+    if (purgeStaleSession) {
+      this.resetCircuitBreaker(instanceId);
+    }
     await this.startInstance(instanceId, purgeStaleSession);
   }
 
@@ -363,6 +654,7 @@ export class WhatsAppEngineManager {
     engineState.deleting.add(instanceId);
     clearReconnectTimer(instanceId);
     engineState.reconnectAttempts.delete(instanceId);
+    this.resetCircuitBreaker(instanceId);
 
     const sock = engineState.sockets.get(instanceId);
     engineState.sockets.delete(instanceId);
@@ -385,6 +677,7 @@ export class WhatsAppEngineManager {
       clearTimeout(timer);
     }
     engineState.reconnectTimers.clear();
+    engineState.circuitBreakers.clear();
 
     const promises = [...engineState.sockets.entries()].map(async ([instanceId, sock]) => {
       engineState.intentionalSockets.add(sock);
@@ -399,7 +692,7 @@ export class WhatsAppEngineManager {
   public static async runHealthCheck(): Promise<void> {
     const instances = db.listInstances();
     for (const instance of instances) {
-      if (['stopped', 'logged_out', 'failed'].includes(instance.status)) {
+      if (['stopped', 'logged_out', 'failed', 'flagged'].includes(instance.status) || this.isCircuitBreakerTripped(instance.id)) {
         continue;
       }
       const runtime = this.getRuntimeState(instance.id);
@@ -418,6 +711,40 @@ export class WhatsAppEngineManager {
 
   public static async requestPairingCode(instanceId: string, phoneNumber: string): Promise<string> {
     const cleanPhone = phoneNumber.replace(/[^0-9]/g, '');
+    const instance = db.getInstance(instanceId);
+    if (!instance) {
+      throw new Error(`Instance '${instanceId}' not found`);
+    }
+
+    if (this.isCircuitBreakerTripped(instanceId)) {
+      const breaker = this.getCircuitBreaker(instanceId);
+      const msg = `Circuit breaker active for instance ${instance.instance_name} (${instanceId}) due to terminal disconnect reason: ${breaker?.reason || breaker?.code || 'terminal'}. Request pairing code aborted.`;
+      console.warn(`[WhatsApp Engine] ${msg}`);
+      throw new Error(msg);
+    }
+
+    // Fail-Closed Proxy Verification before requesting pairing code
+    if (instance.proxy_url || config.requireProxy) {
+      try {
+        await WhatsAppEngineManager.verifyProxy(instance.proxy_url);
+      } catch (proxyErr: any) {
+        const errorMsg = `Fail-Closed Proxy Guard: ${proxyErr.message}`;
+        console.error(`[WhatsApp Engine] ${errorMsg} before requesting pairing code for ${instance.instance_name}`);
+        const existingSock = engineState.sockets.get(instanceId);
+        if (existingSock) {
+          engineState.sockets.delete(instanceId);
+          try { existingSock.end(new Error('Proxy verification failed')); } catch {}
+        }
+        db.updateInstance(instanceId, { status: 'failed' });
+        db.addEventLog(instanceId, 'proxy.verification_failed', {
+          error: proxyErr.message,
+          proxy_url: instance.proxy_url ? instance.proxy_url.replace(/:[^:@]+@/, ':***@') : null,
+          action: 'requestPairingCode',
+        });
+        throw new Error(errorMsg);
+      }
+    }
+
     let socket = engineState.sockets.get(instanceId);
 
     if (!socket) {

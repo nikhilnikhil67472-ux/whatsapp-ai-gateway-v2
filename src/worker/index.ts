@@ -4,7 +4,10 @@ import {
   processWorkerCommandsQueue,
   processOutboundMessagesQueue,
   processWebhookDeliveriesQueue,
+  resetInstancePacing,
+  resetAllColdDuplicateTrackers,
 } from '../queue/sqlite-queue.js';
+import { clearAllInactivityTimers } from '../whatsapp/sender.js';
 import { config } from '../config/index.js';
 
 import { hasRegisteredAuthState } from '../whatsapp/session-store.js';
@@ -66,6 +69,9 @@ export async function stopWorker(): Promise<void> {
   isRunning = false;
   if (pollTimer) clearTimeout(pollTimer);
   console.log('[Worker] Stopping worker and closing WhatsApp sockets...');
+  clearAllInactivityTimers();
+  resetInstancePacing();
+  resetAllColdDuplicateTrackers();
   await WhatsAppEngineManager.shutdownAll();
   console.log('[Worker] Worker stopped cleanly.');
 }

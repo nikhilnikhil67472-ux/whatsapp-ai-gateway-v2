@@ -35,6 +35,8 @@ export const SQL_INIT_TABLES = `
     pairing_phone TEXT,
     warmup_day INTEGER NOT NULL DEFAULT 1,
     daily_sent_count INTEGER NOT NULL DEFAULT 0,
+    daily_warm_sent_count INTEGER NOT NULL DEFAULT 0,
+    daily_cold_sent_count INTEGER NOT NULL DEFAULT 0,
     last_sent_date TEXT,
     events_config TEXT,
     ai_enabled INTEGER NOT NULL DEFAULT 1,
@@ -163,6 +165,14 @@ export const SQL_INIT_TABLES = `
     UNIQUE(instance_id, remote_jid)
   );
 
+  CREATE TABLE IF NOT EXISTS known_contacts (
+    instance_id TEXT NOT NULL REFERENCES whatsapp_instances(id) ON DELETE CASCADE,
+    jid TEXT NOT NULL,
+    last_inbound_at TEXT NOT NULL,
+    is_warm INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY(instance_id, jid)
+  );
+
   CREATE TABLE IF NOT EXISTS auto_reply_rules (
     id TEXT PRIMARY KEY,
     instance_id TEXT NOT NULL REFERENCES whatsapp_instances(id) ON DELETE CASCADE,
@@ -215,4 +225,5 @@ export const SQL_INIT_TABLES = `
   CREATE INDEX IF NOT EXISTS idx_commands_status ON worker_commands(status, created_at);
   CREATE INDEX IF NOT EXISTS idx_webhooks_status ON webhook_deliveries(status, created_at);
   CREATE INDEX IF NOT EXISTS idx_events_instance ON event_logs(instance_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_known_contacts_instance ON known_contacts(instance_id);
 `;

@@ -166,3 +166,19 @@ export interface LeaveGroupParams {
   groupJid: string;
 }
 
+export interface ProxyCheckResult {
+  ok: boolean;
+  proxyUrl?: string | null;
+  egressIp?: string;
+  hostIp?: string;
+  error?: string;
+  checkedAt: string;
+}
+
+export interface CircuitBreakerState {
+  tripped: boolean;
+  reason?: number;
+  code?: string;
+  trippedAt?: string;
+}
+

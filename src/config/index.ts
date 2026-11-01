@@ -10,12 +10,24 @@ if (fs.existsSync(envPath)) {
   dotenv.config();
 }
 
+const isTesting =
+  process.env.TESTING_MODE === 'true' ||
+  process.env.NODE_ENV === 'test' ||
+  process.env.npm_lifecycle_event === 'test' ||
+  process.execArgv.includes('--test') ||
+  process.argv.some((arg) => arg.includes('test'));
+
+if (isTesting && (!process.env.NODE_ENV || process.env.NODE_ENV === 'development')) {
+  process.env.NODE_ENV = 'test';
+}
+
 export const config = {
   env: process.env.NODE_ENV || 'development',
   port: Number.isInteger(parseInt(process.env.PORT || '3000', 10)) ? parseInt(process.env.PORT || '3000', 10) : 3000,
   host: process.env.HOST || '0.0.0.0',
   appBaseUrl: process.env.APP_BASE_URL || 'http://localhost:3000',
   unifiedMode: process.env.UNIFIED_MODE !== 'false', // Default to true for easy single-process run
+  testingMode: isTesting,
 
   // SQLite DB
   sqliteDbPath: process.env.SQLITE_DB_PATH
@@ -47,6 +59,8 @@ export const config = {
   outboundPresenceDelayMs: parseInt(process.env.OUTBOUND_PRESENCE_DELAY_MS || '400', 10),
   defaultRateLimitPerMin: parseInt(process.env.OUTBOUND_DEFAULT_RATE_LIMIT_PER_MIN || '30', 10),
   interactiveDeliveryMode: (process.env.INTERACTIVE_DELIVERY_MODE || 'native_only') as 'guaranteed' | 'native_only' | 'text_only',
+  requireProxy: process.env.REQUIRE_PROXY === 'true',
+  proxyCheckUrl: process.env.PROXY_CHECK_URL || 'https://api.ipify.org?format=json',
 
   // AI & Voice Transcription defaults
   groqApiKey: process.env.GROQ_API_KEY || '',

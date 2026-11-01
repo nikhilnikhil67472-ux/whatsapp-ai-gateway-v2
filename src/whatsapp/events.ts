@@ -214,6 +214,9 @@ export function bindWhatsAppEvents(instanceId: string, socket: WASocket): void {
         name: normalized.pushName,
       });
 
+      // 1b. Record known contact for warm-up quota tracking (Contact Memory)
+      db.recordInboundContact(instance.id, normalized.remoteJid);
+
       // 2. Opt-out handling
       const bodyText = (normalized.text || normalized.caption || '').trim().toLowerCase();
       if (['stop', 'unsubscribe', 'cancel'].includes(bodyText)) {

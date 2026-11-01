@@ -9,6 +9,7 @@ import {
   detectMimeType,
   isHtmlBuffer,
   normalizeImageForWhatsApp,
+  transformShareableMediaUrl,
 } from '../src/whatsapp/media.js';
 
 test('Media: Resolve buffer from base64 string', async () => {
@@ -97,4 +98,31 @@ test('Media: resolveMediaWithMeta auto-normalizes images and synchronizes MIME t
   assert.equal(resolved.isNormalized, true);
   // Magic bytes must match returned mimeType exactly
   assert.equal(detectMimeType(resolved.buffer), resolved.mimeType);
+});
+
+test('Media: transformShareableMediaUrl transforms Google Drive and Dropbox links to direct download streams', () => {
+  // Google Drive sharing view link
+  const gdriveView = 'https://drive.google.com/file/d/1-qU7PLQLqvsLvlDnJlDfBqt7MZCaJWFy/view?usp=sharing';
+  assert.equal(
+    transformShareableMediaUrl(gdriveView),
+    'https://drive.google.com/uc?export=download&id=1-qU7PLQLqvsLvlDnJlDfBqt7MZCaJWFy'
+  );
+
+  // Google Drive open link with id param
+  const gdriveOpen = 'https://drive.google.com/open?id=1AbCdEfGhIjKlMnOpQrStUvWxYz';
+  assert.equal(
+    transformShareableMediaUrl(gdriveOpen),
+    'https://drive.google.com/uc?export=download&id=1AbCdEfGhIjKlMnOpQrStUvWxYz'
+  );
+
+  // Dropbox dl=0 link
+  const dropboxLink = 'https://www.dropbox.com/s/sample123/banner.png?dl=0';
+  assert.equal(
+    transformShareableMediaUrl(dropboxLink),
+    'https://www.dropbox.com/s/sample123/banner.png?dl=1'
+  );
+
+  // Regular direct media URL untouched
+  const regularUrl = 'https://cdn.example.com/assets/photo.jpg';
+  assert.equal(transformShareableMediaUrl(regularUrl), regularUrl);
 });

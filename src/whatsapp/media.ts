@@ -219,6 +219,36 @@ export async function normalizeImageForWhatsApp(buffer: Buffer): Promise<{ buffe
 }
 
 /**
+ * Automatically transforms shareable cloud storage links (Google Drive, Dropbox) into direct download URLs.
+ */
+export function transformShareableMediaUrl(url: string): string {
+  let target = url.trim();
+
+  // Google Drive: /file/d/{id}/view... or /file/d/{id}
+  const driveFileMatch = target.match(/^https?:\/\/(?:drive|docs)\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/i);
+  if (driveFileMatch && driveFileMatch[1]) {
+    return `https://drive.google.com/uc?export=download&id=${driveFileMatch[1]}`;
+  }
+
+  // Google Drive: /open?id={id} or /uc?id={id}
+  const driveIdMatch = target.match(/^https?:\/\/(?:drive|docs)\.google\.com\/(?:open|uc)\?(?:[^&]+&)*id=([a-zA-Z0-9_-]+)/i);
+  if (driveIdMatch && driveIdMatch[1]) {
+    return `https://drive.google.com/uc?export=download&id=${driveIdMatch[1]}`;
+  }
+
+  // Dropbox: share links (dl=0 -> dl=1)
+  if (/^https?:\/\/(?:www\.)?dropbox\.com\//i.test(target)) {
+    if (target.includes('dl=0')) {
+      return target.replace('dl=0', 'dl=1');
+    } else if (!target.includes('dl=1')) {
+      return target + (target.includes('?') ? '&dl=1' : '?dl=1');
+    }
+  }
+
+  return target;
+}
+
+/**
  * Resolves media buffer from base64 string, HTTP/HTTPS URL, or local disk path
  */
 export async function resolveMediaBuffer(mediaUrl?: string, base64?: string): Promise<Buffer> {
@@ -232,13 +262,14 @@ export async function resolveMediaBuffer(mediaUrl?: string, base64?: string): Pr
   }
 
   if (mediaUrl.startsWith('http://') || mediaUrl.startsWith('https://')) {
+    const finalUrl = transformShareableMediaUrl(mediaUrl);
     const headers = {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
       'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,video/*,audio/*,*/*;q=0.8',
       'Accept-Language': 'en-US,en;q=0.9',
     };
 
-    const response = await fetch(mediaUrl, {
+    let response = await fetch(finalUrl, {
       headers,
       redirect: 'follow',
       signal: AbortSignal.timeout(20000),
@@ -248,15 +279,39 @@ export async function resolveMediaBuffer(mediaUrl?: string, base64?: string): Pr
       throw new Error(`Failed to fetch media from URL (${response.status}): ${response.statusText}`);
     }
 
-    const contentType = (response.headers.get('content-type') || '').toLowerCase();
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    let contentType = (response.headers.get('content-type') || '').toLowerCase();
+    let buffer = Buffer.from(await response.arrayBuffer());
+
+    // Google Drive: If the file is large or triggers a virus scan confirmation page, handle confirm token
+    if (finalUrl.includes('drive.google.com') && (contentType.includes('text/html') || isHtmlBuffer(buffer))) {
+      const htmlText = buffer.toString('utf8');
+      const confirmMatch = htmlText.match(/confirm=([0-9A-Za-z_-]+)/) || htmlText.match(/name="confirm" value="([^"]+)"/);
+      const idMatch = finalUrl.match(/id=([a-zA-Z0-9_-]+)/);
+      if (confirmMatch && confirmMatch[1] && idMatch && idMatch[1]) {
+        const confirmedUrl = `https://drive.usercontent.google.com/download?id=${idMatch[1]}&export=download&confirm=${confirmMatch[1]}`;
+        const retryRes = await fetch(confirmedUrl, {
+          headers,
+          redirect: 'follow',
+          signal: AbortSignal.timeout(20000),
+        });
+        if (retryRes.ok) {
+          const retryBuf = Buffer.from(await retryRes.arrayBuffer());
+          if (retryBuf.length > 0 && !isHtmlBuffer(retryBuf)) {
+            buffer = retryBuf;
+            contentType = (retryRes.headers.get('content-type') || '').toLowerCase();
+          }
+        }
+      }
+    }
 
     if (buffer.length === 0) {
       throw new Error('The downloaded media file is empty (0 bytes).');
     }
 
     if (contentType.includes('text/html') || isHtmlBuffer(buffer)) {
+      if (mediaUrl.includes('drive.google.com') || mediaUrl.includes('docs.google.com')) {
+        throw new Error('The Google Drive link returned an HTML webpage instead of a direct media file. Please ensure the Google Drive file permission is set to "Anyone with the link can view" (Public) so it can be downloaded directly.');
+      }
       throw new Error('The provided URL returned an HTML webpage instead of a direct media file. Please provide a direct image link (e.g. ending in .jpg, .png, or direct CDN image URL).');
     }
 

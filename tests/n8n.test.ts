@@ -86,3 +86,45 @@ test('n8n Community Node: Trigger node provides advanced filters and webhook lis
   assert.ok(propNames.includes('ignoreGroups'), 'Must have ignoreGroups property');
   assert.ok(propNames.includes('onlyMedia'), 'Must have onlyMedia property');
 });
+
+test('n8n Community Node: Trigger webhook handles messages.upsert and resolves LID phone numbers', async () => {
+  const pkgDir = path.resolve(process.cwd(), 'packages/n8n-nodes-whatsapp-ai-gateway');
+  const triggerNodePath = path.join(pkgDir, 'dist/nodes/WhatsAppAiGatewayTrigger/WhatsAppAiGatewayTrigger.node.js');
+  const fileUrl = pathToFileURL(triggerNodePath).href;
+  const nodeModule = await import(fileUrl);
+  const TriggerClass = nodeModule.WhatsAppAiGatewayTrigger;
+  const instance = new TriggerClass();
+
+  // Mock execution context
+  const mockContext = {
+    getRequestObject: () => ({
+      body: {
+        event: 'message.received', // legacy event name alias
+        instance: { id: 'test-inst', name: 'main' },
+        message: {
+          id: 'MSG_LID_99',
+          remoteJid: '203465703845969@lid',
+          remoteJidAlt: '918373997316@s.whatsapp.net',
+          pushName: 'Raj',
+          text: 'dd',
+          fromMe: false,
+          type: 'text',
+        },
+      },
+    }),
+    getNodeParameter: (param: string, fallback: any) => {
+      if (param === 'eventFilter') return ['messages.upsert'];
+      return fallback;
+    },
+  };
+
+  const result = await instance.webhook.call(mockContext);
+  assert.ok(result.workflowData);
+  const item = result.workflowData[0][0].json;
+  assert.equal(item.event, 'messages.upsert');
+  assert.equal(item.senderJid, '203465703845969@lid');
+  assert.equal(item.remoteJidAlt, '918373997316@s.whatsapp.net');
+  assert.equal(item.senderPhone, '+918373997316');
+  assert.equal(item.userMessage, 'dd');
+  assert.equal(item.senderName, 'Raj');
+});

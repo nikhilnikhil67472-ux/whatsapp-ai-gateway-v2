@@ -324,3 +324,27 @@ test('WhatsApp Events: Normalize native flow single_select list response', () =>
   assert.equal(normalized.type, 'text');
   assert.equal(normalized.text, 'opt_consultation');
 });
+
+test('WhatsApp Events: Normalize modern LID addressing mode and preserve remoteJidAlt phone JID', () => {
+  const lidMsg = {
+    key: {
+      remoteJid: '203465703845969@lid',
+      remoteJidAlt: '918373997316@s.whatsapp.net',
+      id: '3EB0E4B77604A8E92C7DB5',
+      fromMe: false,
+    },
+    message: {
+      conversation: 'dd',
+    },
+    pushName: 'Raj',
+    messageTimestamp: 1793634833,
+  } as any;
+
+  const normalized = normalizeBaileysMessage(lidMsg);
+  assert.ok(normalized);
+  assert.equal(normalized.id, '3EB0E4B77604A8E92C7DB5');
+  assert.equal(normalized.remoteJid, '203465703845969@lid');
+  assert.equal(normalized.remoteJidAlt, '918373997316@s.whatsapp.net');
+  assert.equal(normalized.text, 'dd');
+  assert.equal(normalized.pushName, 'Raj');
+});

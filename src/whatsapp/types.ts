@@ -1,6 +1,7 @@
 export interface NormalizedMessage {
   id: string;
   remoteJid: string;
+  remoteJidAlt?: string | null;
   senderJid: string;
   pushName: string | null;
   fromMe: boolean;

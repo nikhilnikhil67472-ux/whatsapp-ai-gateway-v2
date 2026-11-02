@@ -296,9 +296,9 @@ export class GatewayDatabase {
     this.ensureDefaultOrganizationAndAdmin();
     try {
       this.db.exec(`
-        DELETE FROM messages WHERE remote_jid LIKE '%@newsletter' OR remote_jid LIKE '%@broadcast' OR remote_jid LIKE '%@lid' OR remote_jid = 'status@broadcast' OR remote_jid = '0@s.whatsapp.net';
-        DELETE FROM conversations WHERE remote_jid LIKE '%@newsletter' OR remote_jid LIKE '%@broadcast' OR remote_jid LIKE '%@lid' OR remote_jid = 'status@broadcast' OR remote_jid = '0@s.whatsapp.net';
-        DELETE FROM contacts WHERE remote_jid LIKE '%@newsletter' OR remote_jid LIKE '%@broadcast' OR remote_jid LIKE '%@lid' OR remote_jid = 'status@broadcast' OR remote_jid = '0@s.whatsapp.net';
+        DELETE FROM messages WHERE remote_jid LIKE '%@newsletter' OR remote_jid LIKE '%@broadcast' OR remote_jid = 'status@broadcast' OR remote_jid = '0@s.whatsapp.net';
+        DELETE FROM conversations WHERE remote_jid LIKE '%@newsletter' OR remote_jid LIKE '%@broadcast' OR remote_jid = 'status@broadcast' OR remote_jid = '0@s.whatsapp.net';
+        DELETE FROM contacts WHERE remote_jid LIKE '%@newsletter' OR remote_jid LIKE '%@broadcast' OR remote_jid = 'status@broadcast' OR remote_jid = '0@s.whatsapp.net';
       `);
     } catch {
       // ignore
@@ -957,7 +957,6 @@ export class GatewayDatabase {
       WHERE instance_id = ? 
         AND remote_jid NOT LIKE '%@newsletter'
         AND remote_jid NOT LIKE '%@broadcast'
-        AND remote_jid NOT LIKE '%@lid'
         AND remote_jid != 'status@broadcast'
         AND remote_jid != '0@s.whatsapp.net'
       ORDER BY last_message_at DESC
@@ -1030,7 +1029,6 @@ export class GatewayDatabase {
       WHERE instance_id = ? 
         AND remote_jid NOT LIKE '%@newsletter'
         AND remote_jid NOT LIKE '%@broadcast'
-        AND remote_jid NOT LIKE '%@lid'
         AND remote_jid != 'status@broadcast'
         AND remote_jid != '0@s.whatsapp.net'
         AND (
@@ -1048,7 +1046,6 @@ export class GatewayDatabase {
     const contentFilter = `
       AND remote_jid NOT LIKE '%@newsletter'
       AND remote_jid NOT LIKE '%@broadcast'
-      AND remote_jid NOT LIKE '%@lid'
       AND remote_jid != 'status@broadcast'
       AND remote_jid != '0@s.whatsapp.net'
       AND (

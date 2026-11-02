@@ -83,11 +83,12 @@ export async function processAiReply(params: {
         : undefined;
 
       const n8nPayload = {
-        event: 'message.received',
+        event: 'messages.upsert',
         instance: { id: instance.id, name: instance.instance_name },
         message: {
           id: message.id,
           remoteJid: message.remoteJid,
+          remoteJidAlt: (message as any).remoteJidAlt || null,
           senderJid: message.senderJid,
           pushName: message.pushName,
           isGroup: message.isGroup,

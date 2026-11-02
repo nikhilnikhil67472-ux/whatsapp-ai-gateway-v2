@@ -69,7 +69,10 @@ export class WhatsAppAiGatewayTrigger {
   async webhook(this: any) {
     const req = this.getRequestObject();
     const body = req.body || {};
-    const event = body.event || 'messages.upsert';
+    let event = body.event || body.event_type || 'messages.upsert';
+    if (event === 'message.received') {
+      event = 'messages.upsert';
+    }
 
     const eventFilter = (this.getNodeParameter('eventFilter', []) as string[]) || [];
     const instanceFilter = (this.getNodeParameter('instanceFilter', '') as string || '').trim().toLowerCase();
@@ -120,12 +123,15 @@ export class WhatsAppAiGatewayTrigger {
       ''
     ).trim();
 
-    const cleanPhone = remoteJid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+    const remoteJidAlt = String(message.remoteJidAlt || message.key?.remoteJidAlt || '');
+    const phoneJid = (remoteJid.endsWith('@lid') && remoteJidAlt) ? remoteJidAlt : remoteJid;
+    const cleanPhone = phoneJid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
 
     const parsedData = {
       event,
       instanceId,
       senderJid: remoteJid,
+      remoteJidAlt: remoteJidAlt || null,
       senderPhone: cleanPhone ? `+${cleanPhone}` : '',
       senderName: message.pushName || 'WhatsApp User',
       userMessage,

@@ -26,6 +26,8 @@ export function normalizeBaileysMessage(raw: proto.IWebMessageInfo): NormalizedM
   const rawRemoteJid = raw.key.remoteJid;
   if (!rawRemoteJid) return null;
   const remoteJid = jidNormalizedUser(rawRemoteJid);
+  const rawAlt = (raw.key as any).remoteJidAlt || rawAny.key?.remoteJidAlt;
+  const remoteJidAlt = rawAlt ? jidNormalizedUser(rawAlt) : null;
 
   // 2. Ignore WhatsApp status broadcasts, channels/newsletters, and broadcast lists
   if (
@@ -175,6 +177,7 @@ export function normalizeBaileysMessage(raw: proto.IWebMessageInfo): NormalizedM
   return {
     id: raw.key.id || `msg_${timestamp}`,
     remoteJid,
+    remoteJidAlt,
     senderJid,
     pushName,
     fromMe,
@@ -216,6 +219,9 @@ export function bindWhatsAppEvents(instanceId: string, socket: WASocket): void {
 
       // 1b. Record known contact for warm-up quota tracking (Contact Memory)
       db.recordInboundContact(instance.id, normalized.remoteJid);
+      if (normalized.remoteJidAlt) {
+        db.recordInboundContact(instance.id, normalized.remoteJidAlt);
+      }
 
       // 2. Opt-out handling
       const bodyText = (normalized.text || normalized.caption || '').trim().toLowerCase();
@@ -280,16 +286,17 @@ export function bindWhatsAppEvents(instanceId: string, socket: WASocket): void {
       });
 
       // 4. Log event
-      db.addEventLog(instance.id, 'message.received', {
+      db.addEventLog(instance.id, 'messages.upsert', {
         message_id: normalized.id,
         remote_jid: normalized.remoteJid,
+        remote_jid_alt: normalized.remoteJidAlt,
         text: normalized.text || normalized.caption,
         type: normalized.type,
       });
 
       // Stream to SSE listeners
       instanceEventStream.emit(instance.id, {
-        event: 'message.received',
+        event: 'messages.upsert',
         instance: { id: instance.id, name: instance.instance_name },
         message: normalized,
         timestamp: new Date().toISOString(),
@@ -314,10 +321,10 @@ export function bindWhatsAppEvents(instanceId: string, socket: WASocket): void {
         for (const targetUrl of webhooksToTrigger) {
           const deliveryId = db.enqueueWebhookDelivery({
             instance_id: instance.id,
-            event_type: 'message.received',
+            event_type: 'messages.upsert',
             target_url: targetUrl,
             payload: {
-              event: 'message.received',
+              event: 'messages.upsert',
               instance: { id: instance.id, name: instance.instance_name },
               message: normalized,
               timestamp: new Date().toISOString(),
